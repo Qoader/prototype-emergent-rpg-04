@@ -31,4 +31,19 @@ describe('heroic fantasy world generation', () => {
     for (const capital of capitals) expect(findPath(map, map.spawn, capital)).not.toBeNull();
     expect(map.features?.filter((feature) => feature.kind === 'gate')).toHaveLength(4);
   });
+
+  it('generates explorable house clusters with walkable settlement centers', () => {
+    const map = createMap();
+    for (const settlement of map.settlements ?? []) {
+      const tiles = map.tiles.filter((tile) => tile.settlementId === settlement.id);
+      const houses = tiles.filter((tile) => tile.kind === 'house');
+      expect(houses.length).toBeGreaterThan(0);
+      expect(houses.every((tile) => !tile.walkable)).toBe(true);
+      expect(map.tiles[settlement.row * map.width + settlement.col].walkable).toBe(true);
+      expect(settlement.bounds.left).toBeGreaterThanOrEqual(3);
+      expect(settlement.bounds.right).toBeLessThan(map.width - 3);
+      expect(settlement.bounds.top).toBeGreaterThanOrEqual(3);
+      expect(settlement.bounds.bottom).toBeLessThan(map.height - 3);
+    }
+  });
 });
