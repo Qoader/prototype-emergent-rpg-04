@@ -11,7 +11,14 @@ export default tseslint.config(
     files: ['**/*.svelte'],
     languageOptions: {
       parserOptions: { parser: tseslint.parser },
-      globals: { window: 'readonly', document: 'readonly', HTMLElement: 'readonly', HTMLCanvasElement: 'readonly' }
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        HTMLElement: 'readonly',
+        HTMLCanvasElement: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly'
+      }
     },
     rules: { 'svelte/no-dom-manipulating': 'off' }
   }
