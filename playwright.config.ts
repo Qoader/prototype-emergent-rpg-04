@@ -8,7 +8,7 @@ export default defineConfig({
   webServer: { command: 'pnpm preview --host 127.0.0.1', url: 'http://127.0.0.1:4173/prototype-emergent-rpg-04/', reuseExistingServer: !process.env.CI },
   projects: [
     { name: 'chromium', use: { ...devices['iPhone 13'] } },
-    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'], hasTouch: true } },
     { name: 'webkit', use: { ...devices['iPhone 13'] } }
   ]
 });
