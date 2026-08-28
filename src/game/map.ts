@@ -1,6 +1,6 @@
 import type { Country, Point, RealmTheme, Settlement, SettlementKind, Tile, TileKind, WorldFeature, WorldMap } from './types';
 
-export const TILE_SIZE = 24;
+export const TILE_SIZE = 48;
 export const MAP_WIDTH = 160;
 export const MAP_HEIGHT = 112;
 const blocked = new Set<TileKind>(['water', 'rock', 'hill']);
