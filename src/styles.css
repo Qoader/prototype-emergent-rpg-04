@@ -1,0 +1,6 @@
+:root { font-family: system-ui, sans-serif; color: #f6f7fb; background: #0d1726; }
+* { box-sizing: border-box; }
+html, body, #app, main { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+.game { position: relative; width: 100%; height: 100%; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.game canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.status { position: absolute; z-index: 2; top: 0.75rem; left: 50%; transform: translateX(-50%); margin: 0; padding: 0.45rem 0.7rem; border-radius: 999px; background: #14213ddd; color: #fff; font-size: 0.8rem; white-space: nowrap; pointer-events: none; }
