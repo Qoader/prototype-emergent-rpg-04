@@ -5,7 +5,7 @@
   import { findPath, resolveDestination } from '../game/pathfinding';
   import { advanceMovement, createMovement } from '../game/movement';
   import { createPlayerSprite, type PlayerAnimation } from '../game/playerSprite';
-  import { drawTileIllustration } from '../game/tileIllustration';
+  import { drawTileGround, drawTileOverhang, overhangZIndex } from '../game/tileIllustration';
   import type { Point } from '../game/types';
 
   let host: HTMLElement;
@@ -20,9 +20,21 @@
       host.appendChild(app.canvas); canvas = app.canvas; canvas.dataset.testid = 'game-canvas'; app.stage.addChild(world);
       const terrain = new Graphics();
       for (const tile of map.tiles) {
-        drawTileIllustration(terrain, tile, map);
+        drawTileGround(terrain, tile, map);
       }
       world.addChild(terrain);
+      const overhangRows: Array<Graphics | undefined> = [];
+      for (const tile of map.tiles) {
+        if (tile.kind !== 'forest' && tile.kind !== 'rock' && tile.kind !== 'hill') continue;
+        let rowGraphics = overhangRows[tile.row];
+        if (!rowGraphics) {
+          rowGraphics = new Graphics();
+          rowGraphics.zIndex = overhangZIndex(tile.row);
+          overhangRows[tile.row] = rowGraphics;
+          actors.addChild(rowGraphics);
+        }
+        drawTileOverhang(rowGraphics, tile);
+      }
       for (const feature of map.features ?? []) {
         const landmark = new Graphics(); const x = feature.col * TILE_SIZE + 24; const y = feature.row * TILE_SIZE + 24;
         landmark.rect(x - 4, y - 18, 8, 36).fill('#d5c294').circle(x, y - 20, 8).fill('#d5c294');
