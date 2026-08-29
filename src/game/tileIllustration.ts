@@ -52,7 +52,6 @@ function drawGround(graphics: Graphics, kind: GroundKind, ox: number, oy: number
 function drawRoute(graphics: Graphics, tile: Tile, connections: RouteConnections, ox: number, oy: number, seed: number): void {
   const bridge = tile.kind === 'bridge';
   const fill = bridge ? '#8b623e' : '#b89462';
-  const highlight = bridge ? '#b17b4d' : '#c8a875';
   const shadow = bridge ? '#68452f' : '#98744f';
   const rect = (x: number, y: number, width: number, height: number, color: FillInput) => graphics.rect(ox + x, oy + y, width, height).fill(color);
   const hasAny = connections.north || connections.east || connections.south || connections.west;
@@ -75,8 +74,6 @@ function drawRoute(graphics: Graphics, tile: Tile, connections: RouteConnections
       if (!connections.east) rect(37, 11, 3, 26, shadow);
     }
   } else {
-    if (connections.north || connections.south) rect(11, 0, 3, 48, highlight);
-    if (connections.east || connections.west) rect(0, 11, 48, 3, highlight);
     if (seed % 2 === 0) rect(19, 20, 3, 2, shadow); else rect(27, 28, 3, 2, shadow);
   }
 }
