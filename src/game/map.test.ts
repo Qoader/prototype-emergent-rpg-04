@@ -32,6 +32,19 @@ describe('heroic fantasy world generation', () => {
     expect(map.features?.filter((feature) => feature.kind === 'gate')).toHaveLength(4);
   });
 
+  it('never generates a two-tile-wide route block', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      const isRoute = (col: number, row: number) => {
+        const tile = map.tiles[row * map.width + col];
+        return tile.kind === 'road' || tile.kind === 'bridge';
+      };
+      for (let row = 0; row < map.height - 1; row += 1) for (let col = 0; col < map.width - 1; col += 1) {
+        expect(isRoute(col, row) && isRoute(col + 1, row) && isRoute(col, row + 1) && isRoute(col + 1, row + 1)).toBe(false);
+      }
+    }
+  }, 30000);
+
   it('generates explorable house clusters with walkable settlement centers', () => {
     const map = createMap();
     for (const settlement of map.settlements ?? []) {
