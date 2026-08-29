@@ -7,9 +7,9 @@ export type RealmTheme = 'highland' | 'forest' | 'river' | 'coastal' | 'marches'
 export type Country = { id: string; name: string; theme: RealmTheme; color: string; banner: string };
 export type SettlementKind = 'capital' | 'city' | 'village';
 export type CardinalDirection = 'north' | 'east' | 'south' | 'west';
-export type SettlementGate = Point & { id: string; direction: CardinalDirection; roadId: string };
+export type SettlementGate = Point & { id: string; direction: CardinalDirection };
 export type WorldRoad = { id: string; settlementIds: [string, string] };
-export type Settlement = Point & { id: string; name: string; kind: SettlementKind; countryId: string; radius: number; bounds: { left: number; top: number; right: number; bottom: number }; entrances: Point[]; gates: SettlementGate[] };
+export type Settlement = Point & { id: string; name: string; kind: SettlementKind; countryId: string; radius: number; bounds: { left: number; top: number; right: number; bottom: number }; gates: SettlementGate[] };
 export type WorldFeature = Point & { kind: 'frontier-marker' };
 
 export type WorldMap = {

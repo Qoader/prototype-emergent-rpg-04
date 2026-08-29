@@ -45,6 +45,33 @@ describe('heroic fantasy world generation', () => {
     }
   }, 30000);
 
+  it('derives fortified gates from actual road crossings', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      const isRoute = (col: number, row: number) => {
+        const tile = map.tiles[row * map.width + col];
+        return tile?.kind === 'road' || tile?.kind === 'bridge' || tile?.kind === 'gate';
+      };
+      const inside = (settlement: NonNullable<typeof map.settlements>[number], col: number, row: number) => col > settlement.bounds.left && col < settlement.bounds.right && row > settlement.bounds.top && row < settlement.bounds.bottom;
+      for (const settlement of map.settlements ?? []) {
+        if (settlement.kind === 'village') expect(settlement.gates).toHaveLength(0);
+        const perimeterGates = settlement.gates.slice().sort((a, b) => a.row - b.row || a.col - b.col);
+        for (const gate of perimeterGates) {
+          expect(gate.col === settlement.bounds.left || gate.col === settlement.bounds.right || gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom).toBe(true);
+          expect((gate.col === settlement.bounds.left || gate.col === settlement.bounds.right) && (gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom)).toBe(false);
+          const neighbors = [{ col: gate.col + 1, row: gate.row }, { col: gate.col - 1, row: gate.row }, { col: gate.col, row: gate.row + 1 }, { col: gate.col, row: gate.row - 1 }];
+          expect(neighbors.some((point) => isRoute(point.col, point.row) && inside(settlement, point.col, point.row))).toBe(true);
+          expect(neighbors.some((point) => isRoute(point.col, point.row) && !inside(settlement, point.col, point.row) && !(point.col >= settlement.bounds.left && point.col <= settlement.bounds.right && point.row >= settlement.bounds.top && point.row <= settlement.bounds.bottom))).toBe(true);
+          expect(gate.direction).toMatch(/^(north|east|south|west)$/);
+        }
+        for (let index = 1; index < perimeterGates.length; index += 1) {
+          const previous = perimeterGates[index - 1]; const current = perimeterGates[index];
+          expect(Math.abs(previous.col - current.col) + Math.abs(previous.row - current.row)).toBeGreaterThan(1);
+        }
+      }
+    }
+  });
+
   it('generates explorable house clusters with walkable settlement centers', () => {
     const map = createMap();
     for (const settlement of map.settlements ?? []) {
