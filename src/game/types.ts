@@ -1,6 +1,7 @@
 export type Point = { col: number; row: number };
 export type TileKind = 'grass' | 'flower' | 'water' | 'rock' | 'forest' | 'hill' | 'sand' | 'road' | 'bridge' | 'house';
-export type Tile = Point & { kind: TileKind; walkable: boolean; countryId?: string; settlementId?: string };
+export type GroundKind = Exclude<TileKind, 'road' | 'bridge'>;
+export type Tile = Point & { kind: TileKind; walkable: boolean; groundKind?: GroundKind; countryId?: string; settlementId?: string };
 
 export type RealmTheme = 'highland' | 'forest' | 'river' | 'coastal' | 'marches';
 export type Country = { id: string; name: string; theme: RealmTheme; color: string; banner: string };

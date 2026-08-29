@@ -20,7 +20,7 @@
       host.appendChild(app.canvas); canvas = app.canvas; canvas.dataset.testid = 'game-canvas'; app.stage.addChild(world);
       const terrain = new Graphics();
       for (const tile of map.tiles) {
-        drawTileIllustration(terrain, tile.kind, tile.col, tile.row);
+        drawTileIllustration(terrain, tile, map);
       }
       world.addChild(terrain);
       for (const feature of map.features ?? []) {
