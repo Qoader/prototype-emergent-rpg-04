@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Graphics } from 'pixi.js';
-import { drawTileOverhang, fortificationOrientation, fortificationPalette, isOverhangingTerrain, overhangZIndex, routeConnections } from './tileIllustration';
+import { drawTileOverhang, fortificationOrientation, fortificationPalette, fortificationSectionZIndex, isOverhangingTerrain, overhangZIndex, routeConnections } from './tileIllustration';
 import type { Country, Settlement, Tile, TileKind, WorldMap } from './types';
 
 function makeMap(rows: string[]): WorldMap {
@@ -45,6 +45,11 @@ describe('terrain overhangs', () => {
 
   it('places an owner row foreground just above the upper row boundary', () => {
     expect(overhangZIndex(3)).toBe(3 * 48 + 1);
+  });
+
+  it('places vertical gate sections on opposite sides of the player depth', () => {
+    expect(fortificationSectionZIndex(3, 'upper')).toBe(3 * 48 - 1);
+    expect(fortificationSectionZIndex(3, 'lower')).toBe(4 * 48 - 1);
   });
 });
 

@@ -13,9 +13,12 @@ const isRoute = (kind: TileKind | undefined) => kind === 'road' || kind === 'bri
 
 export type RouteConnections = { north: boolean; east: boolean; south: boolean; west: boolean };
 export type FortificationOrientation = 'horizontal' | 'vertical' | 'corner';
+export type FortificationSection = 'all' | 'upper' | 'lower';
 
 export const isOverhangingTerrain = (kind: TileKind): kind is Extract<TileKind, 'forest' | 'rock' | 'hill' | 'wall' | 'gate' | 'tower'> => kind === 'forest' || kind === 'rock' || kind === 'hill' || kind === 'wall' || kind === 'gate' || kind === 'tower';
 export const overhangZIndex = (ownerRow: number): number => ownerRow * TILE_SIZE + 1;
+export const fortificationSectionZIndex = (ownerRow: number, section: Exclude<FortificationSection, 'all'>): number =>
+  section === 'upper' ? ownerRow * TILE_SIZE - 1 : (ownerRow + 1) * TILE_SIZE - 1;
 
 export function routeConnections(map: WorldMap, point: { col: number; row: number }): RouteConnections {
   return {
@@ -99,7 +102,7 @@ function drawFlag(graphics: Graphics, x: number, y: number, country: Pick<Countr
   graphics.poly([x + 2, y - 8, x + 12, y - 5, x + 2, y - 4]).fill(country.banner);
 }
 
-function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, direction: CardinalDirection = 'south', orientation: FortificationOrientation = 'horizontal', country: Pick<Country, 'color' | 'banner'> = neutralCountry): void {
+function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, direction: CardinalDirection = 'south', orientation: FortificationOrientation = 'horizontal', country: Pick<Country, 'color' | 'banner'> = neutralCountry, section: FortificationSection = 'all'): void {
   const stone = kind === 'tower' ? '#5f5d58' : '#77736b'; const cap = kind === 'tower' ? '#464640' : '#5f5d57';
   if (kind === 'tower') { graphics.rect(ox + 8, oy - 30, 32, 14).fill(stone); graphics.rect(ox + 12, oy - 38, 24, 9).fill(cap); graphics.rect(ox + 18, oy - 8, 12, 14).fill('#3d3b38'); return; }
   const horizontal = orientation === 'horizontal';
@@ -115,12 +118,18 @@ function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 
   if (orientation === 'corner' && kind === 'wall') { drawWall(); drawFortification(graphics, kind, ox, oy, direction, 'vertical', country); return; }
   if (kind === 'wall') { drawWall(); return; }
   if (horizontal) {
-    graphics.rect(ox + 3, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 37, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 3, oy - 18, 42, 6).fill(cap);
+    graphics.rect(ox + 3, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 37, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 3, oy - 18, 8, 6).fill(cap); graphics.rect(ox + 37, oy - 18, 8, 6).fill(cap);
     graphics.rect(ox + 7, oy - 25, 6, 7).fill(cap); graphics.rect(ox + 35, oy - 25, 6, 7).fill(cap);
-    drawFlag(graphics, ox + 5, oy - 27, country); drawFlag(graphics, ox + 33, oy - 27, country);
+    drawFlag(graphics, ox + 9, oy - 27, country); drawFlag(graphics, ox + 37, oy - 27, country);
   } else {
-    graphics.rect(ox + 17, oy - 24, 14, 35).fill(stone); graphics.rect(ox + 17, oy + 37, 14, 11).fill(stone); graphics.rect(ox + 14, oy - 24, 20, 6).fill(cap); graphics.rect(ox + 14, oy + 42, 20, 6).fill(cap);
-    drawFlag(graphics, ox + 14, oy - 23, country); drawFlag(graphics, ox + 14, oy + 53, country);
+    if (section === 'all' || section === 'upper') {
+      graphics.rect(ox + 17, oy - 24, 14, 35).fill(stone); graphics.rect(ox + 14, oy - 24, 20, 6).fill(cap);
+      drawFlag(graphics, ox + 23, oy - 23, country);
+    }
+    if (section === 'all' || section === 'lower') {
+      graphics.rect(ox + 17, oy + 37, 14, 11).fill(stone); graphics.rect(ox + 14, oy + 42, 20, 6).fill(cap);
+      drawFlag(graphics, ox + 23, oy + 35, country);
+    }
   }
 }
 
@@ -165,7 +174,7 @@ export function drawTileGround(graphics: Graphics, tile: Tile, map: WorldMap): v
 }
 
 /** Draw a tree, rock, or mountain into a foreground batch, reaching into the cell above. */
-export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap): void {
+export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap, section: FortificationSection = 'all'): void {
   if (!isOverhangingTerrain(tile.kind)) return;
   const ox = tile.col * TILE_SIZE; const oy = tile.row * TILE_SIZE;
   if (tile.kind === 'forest' || tile.kind === 'rock' || tile.kind === 'hill') drawOverhang(graphics, tile.kind, ox, oy - TILE_SIZE / 2);
@@ -173,7 +182,7 @@ export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap)
     const gate = settlementFor(tile, map)?.gates.find((candidate) => candidate.col === tile.col && candidate.row === tile.row);
     const direction = gate?.direction ?? 'south';
     const orientation = tile.kind === 'tower' ? 'horizontal' : fortificationOrientation(tile, map);
-    drawFortification(graphics, tile.kind, ox, oy, direction, orientation, fortificationPalette(tile, map));
+    drawFortification(graphics, tile.kind, ox, oy, direction, orientation, fortificationPalette(tile, map), section);
   }
 }
 

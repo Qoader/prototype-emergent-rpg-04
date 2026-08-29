@@ -5,7 +5,7 @@
   import { findPath, resolveDestination } from '../game/pathfinding';
   import { advanceMovement, createMovement } from '../game/movement';
   import { createPlayerSprite, type PlayerAnimation } from '../game/playerSprite';
-  import { drawTileGround, drawTileOverhang, overhangZIndex } from '../game/tileIllustration';
+  import { drawTileGround, drawTileOverhang, fortificationOrientation, fortificationSectionZIndex, overhangZIndex } from '../game/tileIllustration';
   import type { Point } from '../game/types';
 
   let host: HTMLElement;
@@ -24,8 +24,29 @@
       }
       world.addChild(terrain);
       const overhangRows: Array<Graphics | undefined> = [];
+      const verticalGateUpperRows: Array<Graphics | undefined> = [];
+      const verticalGateLowerRows: Array<Graphics | undefined> = [];
       for (const tile of map.tiles) {
         if (tile.kind !== 'forest' && tile.kind !== 'rock' && tile.kind !== 'hill' && tile.kind !== 'wall' && tile.kind !== 'gate' && tile.kind !== 'tower') continue;
+        if (tile.kind === 'gate' && fortificationOrientation(tile, map) === 'vertical') {
+          let upper = verticalGateUpperRows[tile.row];
+          if (!upper) {
+            upper = new Graphics();
+            upper.zIndex = fortificationSectionZIndex(tile.row, 'upper');
+            verticalGateUpperRows[tile.row] = upper;
+            actors.addChild(upper);
+          }
+          drawTileOverhang(upper, tile, map, 'upper');
+          let lower = verticalGateLowerRows[tile.row];
+          if (!lower) {
+            lower = new Graphics();
+            lower.zIndex = fortificationSectionZIndex(tile.row, 'lower');
+            verticalGateLowerRows[tile.row] = lower;
+            actors.addChild(lower);
+          }
+          drawTileOverhang(lower, tile, map, 'lower');
+          continue;
+        }
         let rowGraphics = overhangRows[tile.row];
         if (!rowGraphics) {
           rowGraphics = new Graphics();
