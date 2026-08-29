@@ -1,9 +1,9 @@
-import type { Country, Point, RealmTheme, Settlement, SettlementKind, Tile, TileKind, WorldFeature, WorldMap } from './types';
+import type { CardinalDirection, Country, GroundKind, Point, RealmTheme, Settlement, SettlementGate, SettlementKind, Tile, TileKind, WorldFeature, WorldMap, WorldRoad } from './types';
 
 export const TILE_SIZE = 48;
 export const MAP_WIDTH = 480;
 export const MAP_HEIGHT = 192;
-const blocked = new Set<TileKind>(['water', 'rock', 'hill', 'house']);
+const blocked = new Set<TileKind>(['water', 'rock', 'hill', 'house', 'wall', 'tower']);
 const realms: Array<Omit<Country, 'id'>> = [
   { name: 'Alderwyn', theme: 'highland', color: '#b95747', banner: '#f0c674' },
   { name: 'Thornmere', theme: 'forest', color: '#4c8763', banner: '#d6e2a4' },
@@ -27,13 +27,13 @@ export function createMap(seed = 7331): WorldMap {
   const at = (point: Point) => tiles[point.row * MAP_WIDTH + point.col]; const settlements: Settlement[] = []; const features: WorldFeature[] = [];
   const overlaps = (left: number, top: number, right: number, bottom: number) => settlements.some((s) => left <= s.bounds.right + 3 && right + 3 >= s.bounds.left && top <= s.bounds.bottom + 3 && bottom + 3 >= s.bounds.top);
   const addSettlement = (country: Country, kind: SettlementKind, col: number, row: number, name: string) => {
-    const size = dimensions[kind]; const half = Math.floor(size / 2); const bounds = { left: col - half, top: row - half, right: col + half, bottom: row + half }; const settlement: Settlement = { id: `${country.id}-${kind}-${settlements.length}`, name, kind, countryId: country.id, col, row, radius: half, bounds, entrances: [{ col, row }] }; settlements.push(settlement);
+    const size = dimensions[kind]; const half = Math.floor(size / 2); const bounds = { left: col - half, top: row - half, right: col + half, bottom: row + half }; const settlement: Settlement = { id: `${country.id}-${kind}-${settlements.length}`, name, kind, countryId: country.id, col, row, radius: half, bounds, entrances: [], gates: [] }; settlements.push(settlement);
     for (let y = bounds.top; y <= bounds.bottom; y += 1) for (let x = bounds.left; x <= bounds.right; x += 1) { if (x < 3 || y < 3 || x >= MAP_WIDTH - 3 || y >= MAP_HEIGHT - 3) continue; const tile = at({ col: x, row: y }); tile.kind = 'grass'; tile.walkable = true; tile.settlementId = settlement.id; }
     const ring = Math.floor(size / 2) - 3; for (let y = bounds.top + 2; y <= bounds.bottom - 2; y += 1) for (let x = bounds.left + 2; x <= bounds.right - 2; x += 1) { const dx = x - col; const dy = y - row; const distance = Math.max(Math.abs(dx), Math.abs(dy)); const gap = (x + y * 3 + settlement.id.length) % 5 === 0; if (distance >= ring - 1 && distance <= ring && !gap && Math.abs(dx) > 1 && Math.abs(dy) > 1) { const tile = at({ col: x, row: y }); tile.kind = 'house'; tile.walkable = false; } }
     for (let y = row - 2; y <= row + 2; y += 1) for (let x = col - 2; x <= col + 2; x += 1) { const tile = at({ col: x, row: y }); tile.kind = 'grass'; tile.walkable = true; tile.settlementId = settlement.id; } return settlement;
   };
   countries.forEach((country, index) => { const left = index * (MAP_WIDTH / countries.length) + 10; const right = (index + 1) * (MAP_WIDTH / countries.length) - 10; const center = Math.round((left + right) / 2); addSettlement(country, 'capital', center, index % 2 ? 142 : 50, settlementNames.capital[index]); addSettlement(country, 'city', left + 10, 82 + (index % 2) * 18, settlementNames.city[index * 2]); addSettlement(country, 'city', right - 10, 110 - (index % 2) * 18, settlementNames.city[index * 2 + 1]); if (index % 2 === 0) addSettlement(country, 'city', center, 155, settlementNames.city[10 + index / 2]); const anchors = settlements.filter((s) => s.countryId === country.id && s.kind !== 'village'); for (let village = 0; village < 6; village += 1) { const anchor = anchors[village % anchors.length]; let col = anchor.col + (village % 2 ? -9 : 9); let row = anchor.row + (village < 3 ? 15 : -15); let tries = 0; while (tries < 20 && (overlaps(col - 6, row - 6, col + 6, row + 6) || col < left + 7 || col > right - 7 || row < 10 || row > MAP_HEIGHT - 10)) { col += tries % 2 ? 3 : -3; row += tries % 3 ? 2 : -2; tries += 1; } addSettlement(country, 'village', col, row, settlementNames.village[index * 3 + village % 3]); } });
-  const isRoute = (point: Point) => { const tile = at(point); return tile?.kind === 'road' || tile?.kind === 'bridge'; };
+  const isRoute = (point: Point) => { const tile = at(point); return tile?.kind === 'road' || tile?.kind === 'bridge' || tile?.kind === 'gate'; };
   const key = (point: Point) => `${point.col},${point.row}`;
   const createsWideBlock = (point: Point, pending: Set<string>) => {
     const routeAt = (candidate: Point) => isRoute(candidate) || pending.has(key(candidate));
@@ -50,7 +50,7 @@ export function createMap(seed = 7331): WorldMap {
     const steps = [{ col: 1, row: 0 }, { col: -1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: -1 }];
     while (head < queue.length) { const current = queue[head++]; if (goal(current)) break; for (const step of steps) {
       const next = { col: current.col + step.col, row: current.row + step.row }; const tile = at(next); const nextKey = key(next);
-      if (!tile || next.col < minCol || next.col > maxCol || next.row < minRow || next.row > maxRow || seen.has(nextKey) || forbidden.has(nextKey) || tile.kind === 'house' || (tile.settlementId && tile.settlementId !== sourceId && tile.settlementId !== targetId && !isRoute(next))) continue;
+      if (!tile || next.col < minCol || next.col > maxCol || next.row < minRow || next.row > maxRow || seen.has(nextKey) || forbidden.has(nextKey) || tile.kind === 'house' || tile.kind === 'wall' || tile.kind === 'tower' || (tile.settlementId && tile.settlementId !== sourceId && tile.settlementId !== targetId && !isRoute(next))) continue;
       seen.add(nextKey); came.set(nextKey, current); queue.push(next);
     } }
     const endpoint = queue.slice(0, head).find((point) => goal(point)); if (!endpoint) return null;
@@ -67,7 +67,7 @@ export function createMap(seed = 7331): WorldMap {
     return null;
   };
   const hasSettlementRoute = (settlement: Settlement) => { for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row += 1) for (let col = settlement.bounds.left; col <= settlement.bounds.right; col += 1) if (isRoute({ col, row })) return true; return false; };
-  const carvePath = (path: Point[]) => { for (const point of path) { const tile = at(point); if (tile.kind !== 'road' && tile.kind !== 'bridge') { tile.groundKind = tile.kind; tile.kind = tile.groundKind === 'water' ? 'bridge' : 'road'; } tile.walkable = true; } };
+  const carvePath = (path: Point[]) => { for (const point of path) { const tile = at(point); if (tile.kind !== 'road' && tile.kind !== 'bridge' && tile.kind !== 'gate') { const base: GroundKind = tile.kind === 'water' ? 'water' : tile.kind === 'house' ? 'grass' : ['grass', 'flower', 'rock', 'forest', 'hill', 'sand'].includes(tile.kind) ? tile.kind as GroundKind : 'grass'; tile.groundKind = base; tile.kind = base === 'water' ? 'bridge' : 'road'; } tile.walkable = true; } };
   const carveRoad = (from: Settlement, to: Settlement) => {
     const direct = narrowRoute(from, (point) => point.col === to.col && point.row === to.row, from.id, to.id, false, to);
     if (direct) { carvePath(direct); from.entrances.push(direct[0] ?? from); to.entrances.push(direct[direct.length - 1] ?? to); return; }
@@ -80,7 +80,45 @@ export function createMap(seed = 7331): WorldMap {
   };
   countries.forEach((country, index) => { const own = settlements.filter((s) => s.countryId === country.id); const capital = own.find((s) => s.kind === 'capital')!; const cities = own.filter((s) => s.kind === 'city'); cities.forEach((city) => carveRoad(capital, city)); own.filter((s) => s.kind === 'village').forEach((village, villageIndex) => carveRoad(village, cities[villageIndex % cities.length])); if (index > 0) { const previous = settlements.find((s) => s.countryId === countries[index - 1].id && s.kind === 'capital')!; carveRoad(previous, capital); } });
 
-  const routeKind = (point: Point) => { const kind = at(point)?.kind; return kind === 'road' || kind === 'bridge'; };
+  const roads: WorldRoad[] = [];
+  const addRoad = (a: Settlement, b: Settlement) => roads.push({ id: `road-${roads.length}`, settlementIds: [a.id, b.id] });
+  countries.forEach((country, index) => { const own = settlements.filter((s) => s.countryId === country.id); const capital = own.find((s) => s.kind === 'capital')!; const cities = own.filter((s) => s.kind === 'city'); cities.forEach((city) => addRoad(capital, city)); own.filter((s) => s.kind === 'village').forEach((village, villageIndex) => addRoad(village, cities[villageIndex % cities.length])); if (index > 0) { const previous = settlements.find((s) => s.countryId === countries[index - 1].id && s.kind === 'capital')!; addRoad(previous, capital); } });
+  const directionFor = (from: Settlement, to: Settlement): CardinalDirection => { const dx = to.col - from.col; const dy = to.row - from.row; if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'east' : 'west'; return dy >= 0 ? 'south' : 'north'; };
+  const directionDelta: Record<CardinalDirection, Point> = { north: { col: 0, row: -1 }, east: { col: 1, row: 0 }, south: { col: 0, row: 1 }, west: { col: -1, row: 0 } };
+  const gateSlots = (settlement: Settlement, direction: CardinalDirection): Point[] => { const { left, top, right, bottom } = settlement.bounds; if (direction === 'north') return Array.from({ length: right - left - 3 }, (_, i) => ({ col: left + 2 + i, row: top })); if (direction === 'south') return Array.from({ length: right - left - 3 }, (_, i) => ({ col: left + 2 + i, row: bottom })); if (direction === 'west') return Array.from({ length: bottom - top - 3 }, (_, i) => ({ col: left, row: top + 2 + i })); return Array.from({ length: bottom - top - 3 }, (_, i) => ({ col: right, row: top + 2 + i })); };
+  const occupiedGates = new Map<string, Set<string>>();
+  const pointKey = (point: Point) => `${point.col},${point.row}`;
+  const allocateGate = (settlement: Settlement, road: WorldRoad, other: Settlement): SettlementGate | null => {
+    if (settlement.kind === 'village') return null;
+    const direction = directionFor(settlement, other); const slots = gateSlots(settlement, direction); const occupied = occupiedGates.get(settlement.id) ?? new Set<string>(); occupiedGates.set(settlement.id, occupied);
+    const preferred = slots.slice().sort((a, b) => Math.abs(a.col - other.col) + Math.abs(a.row - other.row) - Math.abs(b.col - other.col) - Math.abs(b.row - other.row) || a.row - b.row || a.col - b.col);
+    const point = preferred.find((candidate) => !occupied.has(pointKey(candidate)) && [...occupied].every((used) => { const [x, y] = used.split(',').map(Number); return Math.abs(candidate.col - x) > 1 || Math.abs(candidate.row - y) > 1; }));
+    if (!point) return null;
+    occupied.add(pointKey(point)); const gate: SettlementGate = { ...point, id: `${settlement.id}-gate-${road.id}`, direction, roadId: road.id }; settlement.gates.push(gate); settlement.entrances.push({ col: point.col, row: point.row }); return gate;
+  };
+  for (const road of roads) { const from = settlements.find((s) => s.id === road.settlementIds[0])!; const to = settlements.find((s) => s.id === road.settlementIds[1])!; for (const settlement of [from, to]) { const gate = allocateGate(settlement, road, settlement === from ? to : from); if (gate) { const tile = at(gate); tile.kind = 'gate'; tile.walkable = true; tile.settlementId = settlement.id; } } }
+  const carveInteriorStreet = (settlement: Settlement, gate: SettlementGate) => { const dx = Math.sign(settlement.col - gate.col); const dy = Math.sign(settlement.row - gate.row); let current = { col: gate.col, row: gate.row }; const path: Point[] = []; while (current.col !== settlement.col || current.row !== settlement.row) { current = { col: current.col + (current.col === settlement.col ? 0 : dx), row: current.row + (current.row === settlement.row ? 0 : dy) }; path.push(current); } const pending = new Set<string>(); for (const point of path) { const tile = at(point); if (tile.kind === 'wall' || tile.kind === 'tower' || createsWideBlock(point, pending)) return false; pending.add(key(point)); } for (const point of path) { const tile = at(point); if (tile.kind === 'house') { tile.kind = 'grass'; tile.walkable = true; } if (tile.kind !== 'gate') { tile.groundKind = 'grass'; tile.kind = 'road'; tile.walkable = true; } } return true; };
+  for (const settlement of settlements.filter((s) => s.kind !== 'village')) for (const gate of settlement.gates) carveInteriorStreet(settlement, gate);
+  for (const settlement of settlements.filter((s) => s.kind !== 'village')) {
+    const { left, top, right, bottom } = settlement.bounds;
+    for (let row = top; row <= bottom; row += 1) for (let col = left; col <= right; col += 1) { const tile = at({ col, row }); const perimeter = col === left || col === right || row === top || row === bottom; if (!perimeter) continue; if (settlement.kind === 'capital' && (col === left || col === right) && (row === top || row === bottom)) { tile.kind = 'tower'; tile.walkable = false; } else if (tile.kind !== 'gate') { tile.kind = 'wall'; tile.walkable = false; } }
+  }
+  for (let pass = 0; pass < 64; pass += 1) {
+    let repaired = false;
+    for (let row = 3; row < MAP_HEIGHT - 4 && !repaired; row += 1) for (let col = 3; col < MAP_WIDTH - 4 && !repaired; col += 1) {
+      const square = [{ col, row }, { col: col + 1, row }, { col, row: row + 1 }, { col: col + 1, row: row + 1 }];
+      if (!square.every(isRoute)) continue;
+      const candidate = square.filter((point) => at(point).kind !== 'gate').sort((a, b) => {
+        const degree = (point: Point) => [{ col: point.col + 1, row: point.row }, { col: point.col - 1, row: point.row }, { col: point.col, row: point.row + 1 }, { col: point.col, row: point.row - 1 }].filter(isRoute).length;
+        return degree(a) - degree(b) || a.row - b.row || a.col - b.col;
+      })[0];
+      if (!candidate) continue;
+      const tile = at(candidate); tile.kind = 'grass'; tile.walkable = true; tile.groundKind = undefined; repaired = true;
+    }
+    if (!repaired) break;
+  }
+
+  const routeKind = (point: Point) => { const kind = at(point)?.kind; return kind === 'road' || kind === 'bridge' || kind === 'gate'; };
   const featureKey = (point: Point) => `${point.col},${point.row}`;
   const featureKeys = new Set<string>();
   const addMarker = (point: Point, avoidRoute = true) => {
@@ -127,7 +165,8 @@ export function createMap(seed = 7331): WorldMap {
     }
   }
   for (let index = 1; index < countries.length; index += 1) for (let row = 20; row < MAP_HEIGHT - 20; row += 32) addMarker({ col: Math.floor(index * MAP_WIDTH / countries.length), row });
-  const startingVillage = settlements.find((s) => s.countryId === countries[0].id && s.kind === 'village')!; return { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, spawn: { col: startingVillage.col, row: startingVillage.row }, countries, settlements, features };
+  const startingVillage = settlements.find((s) => s.countryId === countries[0].id && s.kind === 'village')!;
+  return { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, spawn: { col: startingVillage.col, row: startingVillage.row }, countries, settlements, roads, features };
 }
 export function tileAt(map: WorldMap, point: Point): Tile | undefined { return point.col >= 0 && point.row >= 0 && point.col < map.width && point.row < map.height ? map.tiles[point.row * map.width + point.col] : undefined; }
 export function clampPoint(map: WorldMap, point: Point): Point { return { col: Math.max(0, Math.min(map.width - 1, point.col)), row: Math.max(0, Math.min(map.height - 1, point.row)) }; }

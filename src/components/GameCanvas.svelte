@@ -25,7 +25,7 @@
       world.addChild(terrain);
       const overhangRows: Array<Graphics | undefined> = [];
       for (const tile of map.tiles) {
-        if (tile.kind !== 'forest' && tile.kind !== 'rock' && tile.kind !== 'hill') continue;
+        if (tile.kind !== 'forest' && tile.kind !== 'rock' && tile.kind !== 'hill' && tile.kind !== 'wall' && tile.kind !== 'gate' && tile.kind !== 'tower') continue;
         let rowGraphics = overhangRows[tile.row];
         if (!rowGraphics) {
           rowGraphics = new Graphics();
@@ -33,7 +33,7 @@
           overhangRows[tile.row] = rowGraphics;
           actors.addChild(rowGraphics);
         }
-        drawTileOverhang(rowGraphics, tile);
+        drawTileOverhang(rowGraphics, tile, map);
       }
       for (const feature of map.features ?? []) {
         const landmark = new Graphics(); const x = feature.col * TILE_SIZE + 24; const y = feature.row * TILE_SIZE + 24;

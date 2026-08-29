@@ -1,19 +1,19 @@
 import { Graphics } from 'pixi.js';
 import type { FillInput } from 'pixi.js';
-import type { GroundKind, Tile, TileKind, WorldMap } from './types';
+import type { CardinalDirection, GroundKind, Tile, TileKind, WorldMap } from './types';
 import { TILE_SIZE, tileAt } from './map';
 
 const PATH_WIDTH = 26;
 const colors: Record<TileKind, string> = {
   grass: '#5f9165', flower: '#7fa56e', water: '#3c7798', rock: '#77777a', forest: '#416d54',
-  hill: '#7f875f', sand: '#c7a96d', road: '#b89462', bridge: '#8b623e', house: '#8b684f',
+  hill: '#7f875f', sand: '#c7a96d', road: '#b89462', bridge: '#8b623e', house: '#8b684f', wall: '#77736b', gate: '#77736b', tower: '#68655f',
 };
 const variation = (col: number, row: number) => Math.abs((col * 13 + row * 7) % 11);
-const isRoute = (kind: TileKind | undefined) => kind === 'road' || kind === 'bridge';
+const isRoute = (kind: TileKind | undefined) => kind === 'road' || kind === 'bridge' || kind === 'gate';
 
 export type RouteConnections = { north: boolean; east: boolean; south: boolean; west: boolean };
 
-export const isOverhangingTerrain = (kind: TileKind): kind is Extract<TileKind, 'forest' | 'rock' | 'hill'> => kind === 'forest' || kind === 'rock' || kind === 'hill';
+export const isOverhangingTerrain = (kind: TileKind): kind is Extract<TileKind, 'forest' | 'rock' | 'hill' | 'wall' | 'gate' | 'tower'> => kind === 'forest' || kind === 'rock' || kind === 'hill' || kind === 'wall' || kind === 'gate' || kind === 'tower';
 export const overhangZIndex = (ownerRow: number): number => ownerRow * TILE_SIZE + 1;
 
 export function routeConnections(map: WorldMap, point: { col: number; row: number }): RouteConnections {
@@ -58,6 +58,14 @@ function drawOverhang(graphics: Graphics, kind: Extract<TileKind, 'forest' | 'ro
   }
 }
 
+function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, direction: CardinalDirection = 'south'): void {
+  const stone = kind === 'tower' ? '#5f5d58' : '#77736b'; const cap = kind === 'tower' ? '#464640' : '#5f5d57';
+  const y = oy; graphics.rect(ox + 3, y - 18, 42, 34).fill(stone); graphics.rect(ox + 3, y - 18, 42, 6).fill(cap);
+  if (kind === 'tower') { graphics.rect(ox + 8, y - 30, 32, 14).fill(stone); graphics.rect(ox + 12, y - 38, 24, 9).fill(cap); graphics.rect(ox + 18, y - 8, 12, 14).fill('#3d3b38'); return; }
+  for (let x = 7; x < 43; x += 12) graphics.rect(ox + x, y - 25, 6, 7).fill(cap);
+  if (kind === 'gate') { graphics.rect(ox + 16, y - 2, 16, 18).fill('#3d3b38'); if (direction === 'east' || direction === 'west') { graphics.rect(ox + 16, y - 2, 16, 18).fill('#3d3b38'); } }
+}
+
 function drawRoute(graphics: Graphics, tile: Tile, connections: RouteConnections, ox: number, oy: number, seed: number): void {
   const bridge = tile.kind === 'bridge';
   const fill = bridge ? '#8b623e' : '#b89462';
@@ -94,13 +102,19 @@ export function drawTileGround(graphics: Graphics, tile: Tile, map: WorldMap): v
     const fallback: GroundKind = tile.kind === 'bridge' ? 'water' : 'grass';
     drawGround(graphics, tile.groundKind ?? fallback, ox, oy, seed, tile.kind === 'bridge');
     drawRoute(graphics, tile, routeConnections(map, tile), ox, oy, seed);
-  } else drawGround(graphics, tile.kind, ox, oy, seed, true);
+  } else if (tile.kind === 'wall' || tile.kind === 'tower') drawGround(graphics, 'grass', ox, oy, seed, true);
+  else drawGround(graphics, tile.kind, ox, oy, seed, true);
 }
 
 /** Draw a tree, rock, or mountain into a foreground batch, reaching into the cell above. */
-export function drawTileOverhang(graphics: Graphics, tile: Tile): void {
+export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap): void {
   if (!isOverhangingTerrain(tile.kind)) return;
-  drawOverhang(graphics, tile.kind, tile.col * TILE_SIZE, tile.row * TILE_SIZE - TILE_SIZE / 2);
+  const ox = tile.col * TILE_SIZE; const oy = tile.row * TILE_SIZE;
+  if (tile.kind === 'forest' || tile.kind === 'rock' || tile.kind === 'hill') drawOverhang(graphics, tile.kind, ox, oy - TILE_SIZE / 2);
+  else {
+    const gate = map?.settlements?.find((settlement) => settlement.id === tile.settlementId)?.gates.find((candidate) => candidate.col === tile.col && candidate.row === tile.row);
+    drawFortification(graphics, tile.kind, ox, oy, gate?.direction);
+  }
 }
 
 /** Draw one complete tile, retained for callers that do not need depth sorting. */
