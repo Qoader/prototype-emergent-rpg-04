@@ -29,7 +29,7 @@ describe('heroic fantasy world generation', () => {
     const map = createMap();
     const capitals = map.settlements?.filter((place) => place.kind === 'capital') ?? [];
     for (const capital of capitals) expect(findPath(map, map.spawn, capital)).not.toBeNull();
-    expect(map.features?.filter((feature) => feature.kind === 'gate')).toHaveLength(4);
+    expect(map.features?.filter((feature) => feature.kind === 'frontier-marker').length).toBeGreaterThan(0);
   });
 
   it('never generates a two-tile-wide route block', () => {

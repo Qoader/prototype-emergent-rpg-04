@@ -78,8 +78,56 @@ export function createMap(seed = 7331): WorldMap {
     if (!merge) return;
     carvePath(merge); origin.entrances.push(merge[0] ?? origin);
   };
-  countries.forEach((country, index) => { const own = settlements.filter((s) => s.countryId === country.id); const capital = own.find((s) => s.kind === 'capital')!; const cities = own.filter((s) => s.kind === 'city'); cities.forEach((city) => carveRoad(capital, city)); own.filter((s) => s.kind === 'village').forEach((village, villageIndex) => carveRoad(village, cities[villageIndex % cities.length])); if (index > 0) { const previous = settlements.find((s) => s.countryId === countries[index - 1].id && s.kind === 'capital')!; carveRoad(previous, capital); features.push({ col: Math.floor(index * MAP_WIDTH / countries.length), row: capital.row, kind: 'gate' }); } });
-  for (let index = 1; index < countries.length; index += 1) for (let row = 20; row < MAP_HEIGHT - 20; row += 32) features.push({ col: Math.floor(index * MAP_WIDTH / countries.length), row, kind: 'frontier-marker' }); const startingVillage = settlements.find((s) => s.countryId === countries[0].id && s.kind === 'village')!; return { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, spawn: { col: startingVillage.col, row: startingVillage.row }, countries, settlements, features };
+  countries.forEach((country, index) => { const own = settlements.filter((s) => s.countryId === country.id); const capital = own.find((s) => s.kind === 'capital')!; const cities = own.filter((s) => s.kind === 'city'); cities.forEach((city) => carveRoad(capital, city)); own.filter((s) => s.kind === 'village').forEach((village, villageIndex) => carveRoad(village, cities[villageIndex % cities.length])); if (index > 0) { const previous = settlements.find((s) => s.countryId === countries[index - 1].id && s.kind === 'capital')!; carveRoad(previous, capital); } });
+
+  const routeKind = (point: Point) => { const kind = at(point)?.kind; return kind === 'road' || kind === 'bridge'; };
+  const featureKey = (point: Point) => `${point.col},${point.row}`;
+  const featureKeys = new Set<string>();
+  const addMarker = (point: Point, avoidRoute = true) => {
+    if (point.col < 0 || point.row < 0 || point.col >= MAP_WIDTH || point.row >= MAP_HEIGHT || (avoidRoute && routeKind(point))) return false;
+    const key = featureKey(point); if (featureKeys.has(key)) return false;
+    features.push({ ...point, kind: 'frontier-marker' }); featureKeys.add(key); return true;
+  };
+  const addFlankingMarker = (origin: Point, delta: Point) => {
+    for (let distance = 1; distance < Math.max(MAP_WIDTH, MAP_HEIGHT); distance += 1) {
+      if (addMarker({ col: origin.col + delta.col * distance, row: origin.row + delta.row * distance })) return;
+    }
+  };
+  const countryPair = (a: string, b: string) => a < b ? `${a}|${b}` : `${b}|${a}`;
+  const addCrossingCorridor = (orientation: 'horizontal' | 'vertical', seam: number, start: number, end: number) => {
+    if (orientation === 'horizontal') {
+      const crossing: Point = { col: seam, row: Math.floor((start + end) / 2) };
+      addFlankingMarker(crossing, { col: 0, row: -1 }); addFlankingMarker(crossing, { col: 0, row: 1 });
+    } else {
+      const crossing: Point = { col: Math.floor((start + end) / 2), row: seam };
+      addFlankingMarker(crossing, { col: -1, row: 0 }); addFlankingMarker(crossing, { col: 1, row: 0 });
+    }
+  };
+  // A horizontal corridor crosses a vertical seam; a vertical corridor crosses a horizontal seam.
+  for (let leftCol = 0; leftCol < MAP_WIDTH - 1; leftCol += 1) {
+    let start = -1; let pair = '';
+    for (let row = 0; row <= MAP_HEIGHT; row += 1) {
+      const west = row < MAP_HEIGHT ? at({ col: leftCol, row }) : undefined;
+      const east = row < MAP_HEIGHT ? at({ col: leftCol + 1, row }) : undefined;
+      const currentPair = west && east && west.countryId !== east.countryId && routeKind(west) && routeKind(east) ? countryPair(west.countryId!, east.countryId!) : '';
+      if (currentPair && currentPair === pair) continue;
+      if (start >= 0) addCrossingCorridor('horizontal', leftCol + 1, start, row - 1);
+      start = currentPair ? row : -1; pair = currentPair;
+    }
+  }
+  for (let topRow = 0; topRow < MAP_HEIGHT - 1; topRow += 1) {
+    let start = -1; let pair = '';
+    for (let col = 0; col <= MAP_WIDTH; col += 1) {
+      const north = col < MAP_WIDTH ? at({ col, row: topRow }) : undefined;
+      const south = col < MAP_WIDTH ? at({ col, row: topRow + 1 }) : undefined;
+      const currentPair = north && south && north.countryId !== south.countryId && routeKind(north) && routeKind(south) ? countryPair(north.countryId!, south.countryId!) : '';
+      if (currentPair && currentPair === pair) continue;
+      if (start >= 0) addCrossingCorridor('vertical', topRow + 1, start, col - 1);
+      start = currentPair ? col : -1; pair = currentPair;
+    }
+  }
+  for (let index = 1; index < countries.length; index += 1) for (let row = 20; row < MAP_HEIGHT - 20; row += 32) addMarker({ col: Math.floor(index * MAP_WIDTH / countries.length), row });
+  const startingVillage = settlements.find((s) => s.countryId === countries[0].id && s.kind === 'village')!; return { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, spawn: { col: startingVillage.col, row: startingVillage.row }, countries, settlements, features };
 }
 export function tileAt(map: WorldMap, point: Point): Tile | undefined { return point.col >= 0 && point.row >= 0 && point.col < map.width && point.row < map.height ? map.tiles[point.row * map.width + point.col] : undefined; }
 export function clampPoint(map: WorldMap, point: Point): Point { return { col: Math.max(0, Math.min(map.width - 1, point.col)), row: Math.max(0, Math.min(map.height - 1, point.row)) }; }

@@ -25,8 +25,7 @@
       world.addChild(terrain);
       for (const feature of map.features ?? []) {
         const landmark = new Graphics(); const x = feature.col * TILE_SIZE + 24; const y = feature.row * TILE_SIZE + 24;
-        if (feature.kind === 'gate') landmark.rect(x - 14, y - 18, 28, 36).fill('#69513f').rect(x - 6, y - 10, 12, 28).fill('#2d3d42');
-        else landmark.rect(x - 4, y - 18, 8, 36).fill('#d5c294').circle(x, y - 20, 8).fill('#d5c294');
+        landmark.rect(x - 4, y - 18, 8, 36).fill('#d5c294').circle(x, y - 20, 8).fill('#d5c294');
         landmark.zIndex = feature.row * TILE_SIZE + TILE_SIZE;
         actors.addChild(landmark);
       }
