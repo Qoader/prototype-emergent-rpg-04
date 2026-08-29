@@ -130,7 +130,7 @@ function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 
     }
     if (section === 'all' || section === 'lower') {
       graphics.rect(ox + 17, oy + 37, 14, 11).fill(stone); graphics.rect(ox + 14, oy + 42, 20, 6).fill(cap);
-      drawFlag(graphics, ox + 23, oy + 35, country);
+      drawFlag(graphics, ox + 23, oy + 43, country);
     }
   }
 }
