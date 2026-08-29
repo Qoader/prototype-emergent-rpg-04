@@ -19,12 +19,12 @@ function frame(animation: PlayerAnimation, facing: Facing, index: number): Graph
   } else {
     g.rect(-10, -46 + bob, 20, 12).fill(hair).rect(-8, -36 + bob, 16, 10).fill(skin);
     if (facing === 'south') g.rect(-5, -32 + bob, 2, 2).fill('#14213d').rect(3, -32 + bob, 2, 2).fill('#14213d');
+    if (facing === 'east') g.rect(3, -32 + bob, 2, 2).fill('#14213d');
+    if (facing === 'west') g.rect(-5, -32 + bob, 2, 2).fill('#14213d');
     g.rect(-16, -26 + bob, 32, 18).fill(coat).rect(-22, -24 + bob, 6, 14).fill(trim).rect(16, -24 + bob, 6, 14).fill(trim);
   }
   g.rect(-12, -8 + bob, 10, 8 + Math.max(0, step)).fill(boot).rect(2, -8 + bob, 10, 8 + Math.max(0, -step)).fill(boot);
   g.rect(-22, -20 + bob, 6, 4).fill(trim).rect(16, -20 + bob, 6, 4).fill(trim);
-  if (facing === 'east') g.rect(16, -40 + bob, 6, 16).fill(coat);
-  if (facing === 'west') g.rect(-22, -40 + bob, 6, 16).fill(coat);
   return g;
 }
 
