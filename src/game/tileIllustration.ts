@@ -1,6 +1,6 @@
 import { Graphics } from 'pixi.js';
 import type { FillInput } from 'pixi.js';
-import type { CardinalDirection, GroundKind, Tile, TileKind, WorldMap } from './types';
+import type { CardinalDirection, Country, GroundKind, Tile, TileKind, WorldMap } from './types';
 import { TILE_SIZE, tileAt } from './map';
 
 const PATH_WIDTH = 26;
@@ -12,6 +12,7 @@ const variation = (col: number, row: number) => Math.abs((col * 13 + row * 7) % 
 const isRoute = (kind: TileKind | undefined) => kind === 'road' || kind === 'bridge' || kind === 'gate';
 
 export type RouteConnections = { north: boolean; east: boolean; south: boolean; west: boolean };
+export type FortificationOrientation = 'horizontal' | 'vertical' | 'corner';
 
 export const isOverhangingTerrain = (kind: TileKind): kind is Extract<TileKind, 'forest' | 'rock' | 'hill' | 'wall' | 'gate' | 'tower'> => kind === 'forest' || kind === 'rock' || kind === 'hill' || kind === 'wall' || kind === 'gate' || kind === 'tower';
 export const overhangZIndex = (ownerRow: number): number => ownerRow * TILE_SIZE + 1;
@@ -23,6 +24,40 @@ export function routeConnections(map: WorldMap, point: { col: number; row: numbe
     south: isRoute(tileAt(map, { col: point.col, row: point.row + 1 })?.kind),
     west: isRoute(tileAt(map, { col: point.col - 1, row: point.row })?.kind),
   };
+}
+
+const neutralCountry: Pick<Country, 'color' | 'banner'> = { color: '#777b82', banner: '#ded7c5' };
+
+function settlementFor(tile: Tile, map?: WorldMap) {
+  return map?.settlements?.find((settlement) => settlement.id === tile.settlementId);
+}
+
+export function fortificationOrientation(tile: Tile, map?: WorldMap): FortificationOrientation {
+  const settlement = settlementFor(tile, map);
+  if (settlement) {
+    const { left, top, right, bottom } = settlement.bounds;
+    const horizontal = tile.row === top || tile.row === bottom;
+    const vertical = tile.col === left || tile.col === right;
+    if (horizontal && vertical) return 'corner';
+    if (horizontal) return 'horizontal';
+    if (vertical) return 'vertical';
+  }
+  const neighbors = map ? routeConnections(map, tile) : { north: false, east: false, south: false, west: false };
+  if (tile.kind === 'gate') {
+    if ((neighbors.north || neighbors.south) && !(neighbors.east || neighbors.west)) return 'horizontal';
+    if ((neighbors.east || neighbors.west) && !(neighbors.north || neighbors.south)) return 'vertical';
+  } else if (map) {
+    const northSouth = [tileAt(map, { col: tile.col, row: tile.row - 1 }), tileAt(map, { col: tile.col, row: tile.row + 1 })].some((candidate) => candidate?.kind === 'wall');
+    const eastWest = [tileAt(map, { col: tile.col - 1, row: tile.row }), tileAt(map, { col: tile.col + 1, row: tile.row })].some((candidate) => candidate?.kind === 'wall');
+    if (northSouth && !eastWest) return 'vertical';
+  }
+  return 'horizontal';
+}
+
+export function fortificationPalette(tile: Tile, map?: WorldMap): Pick<Country, 'color' | 'banner'> {
+  const settlement = settlementFor(tile, map);
+  const country = map?.countries?.find((candidate) => candidate.id === settlement?.countryId);
+  return country ? { color: country.color, banner: country.banner } : neutralCountry;
 }
 
 function drawGround(graphics: Graphics, kind: GroundKind, ox: number, oy: number, seed: number, detail: boolean): void {
@@ -58,12 +93,35 @@ function drawOverhang(graphics: Graphics, kind: Extract<TileKind, 'forest' | 'ro
   }
 }
 
-function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, direction: CardinalDirection = 'south'): void {
+function drawFlag(graphics: Graphics, x: number, y: number, country: Pick<Country, 'color' | 'banner'>): void {
+  graphics.rect(x, y - 15, 2, 17).fill('#4d4438');
+  graphics.poly([x + 2, y - 14, x + 12, y - 11, x + 2, y - 7]).fill(country.color);
+  graphics.poly([x + 2, y - 8, x + 12, y - 5, x + 2, y - 4]).fill(country.banner);
+}
+
+function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, direction: CardinalDirection = 'south', orientation: FortificationOrientation = 'horizontal', country: Pick<Country, 'color' | 'banner'> = neutralCountry): void {
   const stone = kind === 'tower' ? '#5f5d58' : '#77736b'; const cap = kind === 'tower' ? '#464640' : '#5f5d57';
-  const y = oy; graphics.rect(ox + 3, y - 18, 42, 34).fill(stone); graphics.rect(ox + 3, y - 18, 42, 6).fill(cap);
-  if (kind === 'tower') { graphics.rect(ox + 8, y - 30, 32, 14).fill(stone); graphics.rect(ox + 12, y - 38, 24, 9).fill(cap); graphics.rect(ox + 18, y - 8, 12, 14).fill('#3d3b38'); return; }
-  for (let x = 7; x < 43; x += 12) graphics.rect(ox + x, y - 25, 6, 7).fill(cap);
-  if (kind === 'gate') { graphics.rect(ox + 16, y - 2, 16, 18).fill('#3d3b38'); if (direction === 'east' || direction === 'west') { graphics.rect(ox + 16, y - 2, 16, 18).fill('#3d3b38'); } }
+  if (kind === 'tower') { graphics.rect(ox + 8, oy - 30, 32, 14).fill(stone); graphics.rect(ox + 12, oy - 38, 24, 9).fill(cap); graphics.rect(ox + 18, oy - 8, 12, 14).fill('#3d3b38'); return; }
+  const horizontal = orientation === 'horizontal';
+  const drawWall = () => {
+    if (horizontal) {
+      graphics.rect(ox + 3, oy - 18, 42, 34).fill(stone); graphics.rect(ox + 3, oy - 18, 42, 6).fill(cap);
+      for (let x = 7; x < 43; x += 12) graphics.rect(ox + x, oy - 25, 6, 7).fill(cap);
+    } else {
+      graphics.rect(ox + 17, oy - 24, 14, 48).fill(stone); graphics.rect(ox + 14, oy - 24, 20, 6).fill(cap);
+      for (let y = -18; y < 22; y += 12) graphics.rect(ox + 14, oy + y, 6, 6).fill(cap);
+    }
+  };
+  if (orientation === 'corner' && kind === 'wall') { drawWall(); drawFortification(graphics, kind, ox, oy, direction, 'vertical', country); return; }
+  if (kind === 'wall') { drawWall(); return; }
+  if (horizontal) {
+    graphics.rect(ox + 3, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 37, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 3, oy - 18, 42, 6).fill(cap);
+    graphics.rect(ox + 7, oy - 25, 6, 7).fill(cap); graphics.rect(ox + 35, oy - 25, 6, 7).fill(cap);
+    drawFlag(graphics, ox + 5, oy - 27, country); drawFlag(graphics, ox + 33, oy - 27, country);
+  } else {
+    graphics.rect(ox + 17, oy - 24, 14, 35).fill(stone); graphics.rect(ox + 17, oy + 37, 14, 11).fill(stone); graphics.rect(ox + 14, oy - 24, 20, 6).fill(cap); graphics.rect(ox + 14, oy + 42, 20, 6).fill(cap);
+    drawFlag(graphics, ox + 14, oy - 23, country); drawFlag(graphics, ox + 14, oy + 53, country);
+  }
 }
 
 function drawRoute(graphics: Graphics, tile: Tile, connections: RouteConnections, ox: number, oy: number, seed: number): void {
@@ -112,13 +170,15 @@ export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap)
   const ox = tile.col * TILE_SIZE; const oy = tile.row * TILE_SIZE;
   if (tile.kind === 'forest' || tile.kind === 'rock' || tile.kind === 'hill') drawOverhang(graphics, tile.kind, ox, oy - TILE_SIZE / 2);
   else {
-    const gate = map?.settlements?.find((settlement) => settlement.id === tile.settlementId)?.gates.find((candidate) => candidate.col === tile.col && candidate.row === tile.row);
-    drawFortification(graphics, tile.kind, ox, oy, gate?.direction);
+    const gate = settlementFor(tile, map)?.gates.find((candidate) => candidate.col === tile.col && candidate.row === tile.row);
+    const direction = gate?.direction ?? 'south';
+    const orientation = tile.kind === 'tower' ? 'horizontal' : fortificationOrientation(tile, map);
+    drawFortification(graphics, tile.kind, ox, oy, direction, orientation, fortificationPalette(tile, map));
   }
 }
 
 /** Draw one complete tile, retained for callers that do not need depth sorting. */
 export function drawTileIllustration(graphics: Graphics, tile: Tile, map: WorldMap): void {
   drawTileGround(graphics, tile, map);
-  drawTileOverhang(graphics, tile);
+  drawTileOverhang(graphics, tile, map);
 }
