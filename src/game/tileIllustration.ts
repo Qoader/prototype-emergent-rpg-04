@@ -108,8 +108,10 @@ function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 
   const horizontal = orientation === 'horizontal';
   const drawWall = () => {
     if (horizontal) {
-      graphics.rect(ox + 3, oy - 18, 42, 34).fill(stone); graphics.rect(ox + 3, oy - 18, 42, 6).fill(cap);
-      for (let x = 7; x < 43; x += 12) graphics.rect(ox + x, oy - 25, 6, 7).fill(cap);
+      // Horizontal sections are edge-to-edge sprites. Keeping the body and
+      // parapet flush with the tile bounds removes grass slivers between runs.
+      graphics.rect(ox, oy - 18, 48, 34).fill(stone); graphics.rect(ox, oy - 18, 48, 6).fill(cap);
+      for (let x = 6; x < 48; x += 12) graphics.rect(ox + x, oy - 25, 6, 7).fill(cap);
     } else {
       graphics.rect(ox + 17, oy - 24, 14, 48).fill(stone); graphics.rect(ox + 14, oy - 24, 20, 6).fill(cap);
       for (let y = -18; y < 22; y += 12) graphics.rect(ox + 14, oy + y, 6, 6).fill(cap);
@@ -118,9 +120,9 @@ function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 
   if (orientation === 'corner' && kind === 'wall') { drawWall(); drawFortification(graphics, kind, ox, oy, direction, 'vertical', country); return; }
   if (kind === 'wall') { drawWall(); return; }
   if (horizontal) {
-    graphics.rect(ox + 3, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 37, oy - 18, 8, 34).fill(stone); graphics.rect(ox + 3, oy - 18, 8, 6).fill(cap); graphics.rect(ox + 37, oy - 18, 8, 6).fill(cap);
-    graphics.rect(ox + 7, oy - 25, 6, 7).fill(cap); graphics.rect(ox + 35, oy - 25, 6, 7).fill(cap);
-    drawFlag(graphics, ox + 9, oy - 27, country); drawFlag(graphics, ox + 37, oy - 27, country);
+    graphics.rect(ox, oy - 18, 11, 34).fill(stone); graphics.rect(ox + 37, oy - 18, 11, 34).fill(stone); graphics.rect(ox, oy - 18, 11, 6).fill(cap); graphics.rect(ox + 37, oy - 18, 11, 6).fill(cap);
+    graphics.rect(ox + 4, oy - 25, 6, 7).fill(cap); graphics.rect(ox + 38, oy - 25, 6, 7).fill(cap);
+    drawFlag(graphics, ox + 6, oy - 27, country); drawFlag(graphics, ox + 40, oy - 27, country);
   } else {
     if (section === 'all' || section === 'upper') {
       graphics.rect(ox + 17, oy - 24, 14, 35).fill(stone); graphics.rect(ox + 14, oy - 24, 20, 6).fill(cap);
