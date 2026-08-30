@@ -12,7 +12,24 @@ describe('heroic fantasy world generation', () => {
       const places = first.settlements?.filter((place) => place.countryId === country.id) ?? [];
       expect(places.filter((place) => place.kind === 'capital')).toHaveLength(1);
       expect(places.filter((place) => place.kind === 'city').length).toBeGreaterThanOrEqual(2);
-      expect(places.filter((place) => place.kind === 'village')).toHaveLength(6);
+      expect(places.filter((place) => place.kind === 'village').length).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('keeps settlement bounds separated and city wall ownership intact', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      const settlements = map.settlements ?? [];
+      for (let index = 0; index < settlements.length; index += 1) for (let other = 0; other < index; other += 1) {
+        const a = settlements[index].bounds; const b = settlements[other].bounds;
+        expect(a.left > b.right + 3 || a.right + 3 < b.left || a.top > b.bottom + 3 || a.bottom + 3 < b.top).toBe(true);
+      }
+      for (const settlement of settlements.filter((place) => place.kind === 'city')) {
+        for (let row = settlement.bounds.top + 1; row < settlement.bounds.bottom; row += 1) for (const col of [settlement.bounds.left, settlement.bounds.right]) {
+          const tile = map.tiles[row * map.width + col];
+          expect(tile.settlementId).toBe(settlement.id);
+        }
+      }
     }
   });
 
