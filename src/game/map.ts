@@ -1,4 +1,5 @@
 import type {
+  CardinalDirection,
   Country,
   GroundKind,
   Point,
@@ -233,18 +234,13 @@ export function createMap(seed = 7331): WorldMap {
       );
   });
   for (const s of settlements.filter((q) => q.kind !== 'village')) {
-    const east = s.col < MAP_WIDTH / 2;
-    const p = { col: east ? s.bounds.left : s.bounds.right, row: s.row };
-    put(p, { kind: 'gate', walkable: true, settlementId: s.id });
-    s.gates.push({ ...p, id: `${s.id}-gate`, direction: east ? 'west' : 'east' });
     for (let y = s.bounds.top; y <= s.bounds.bottom; y++)
       for (let x = s.bounds.left; x <= s.bounds.right; x++)
         if (
           (x === s.bounds.left ||
             x === s.bounds.right ||
             y === s.bounds.top ||
-            y === s.bounds.bottom) &&
-          k({ col: x, row: y }) !== k(p)
+            y === s.bounds.bottom)
         )
           put({ col: x, row: y }, { kind: 'wall', walkable: false, settlementId: s.id });
   }
@@ -254,6 +250,60 @@ export function createMap(seed = 7331): WorldMap {
     const a = settlements.find((s) => s.id === road.settlementIds[0]);
     const b = settlements.find((s) => s.id === road.settlementIds[1]);
     if (a && b) route(a, b);
+  }
+  // Derive gates from the final road topology so metadata matches rendered tiles.
+  const isRoute = (point: Point) => {
+    const kind = overlays.get(k(point))?.kind;
+    return kind === 'road' || kind === 'bridge' || kind === 'gate';
+  };
+  const directions: Array<{ direction: CardinalDirection; delta: Point }> = [
+    { direction: 'north', delta: { col: 0, row: -1 } },
+    { direction: 'east', delta: { col: 1, row: 0 } },
+    { direction: 'south', delta: { col: 0, row: 1 } },
+    { direction: 'west', delta: { col: -1, row: 0 } }
+  ];
+  const inside = (settlement: Settlement, point: Point) =>
+    point.col > settlement.bounds.left &&
+    point.col < settlement.bounds.right &&
+    point.row > settlement.bounds.top &&
+    point.row < settlement.bounds.bottom;
+  for (const settlement of settlements.filter((s) => s.kind !== 'village')) {
+    for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row++) {
+      for (let col = settlement.bounds.left; col <= settlement.bounds.right; col++) {
+        const point = { col, row };
+        const perimeter =
+          col === settlement.bounds.left ||
+          col === settlement.bounds.right ||
+          row === settlement.bounds.top ||
+          row === settlement.bounds.bottom;
+        const corner =
+          (col === settlement.bounds.left || col === settlement.bounds.right) &&
+          (row === settlement.bounds.top || row === settlement.bounds.bottom);
+        if (!perimeter || corner || !isRoute(point)) continue;
+        const crossing = directions.some(({ delta }) => {
+          const neighbor = { col: col + delta.col, row: row + delta.row };
+          return isRoute(neighbor) && inside(settlement, neighbor);
+        });
+        const exterior = directions.find(({ delta }) => {
+          const neighbor = { col: col + delta.col, row: row + delta.row };
+          return (
+            isRoute(neighbor) &&
+            !inside(settlement, neighbor) &&
+            !(neighbor.col >= settlement.bounds.left &&
+              neighbor.col <= settlement.bounds.right &&
+              neighbor.row >= settlement.bounds.top &&
+              neighbor.row <= settlement.bounds.bottom)
+          );
+        });
+        if (!crossing || !exterior) continue;
+        put(point, { kind: 'gate', walkable: true, settlementId: settlement.id });
+        settlement.gates.push({
+          ...point,
+          id: `${settlement.id}-gate-${point.col}-${point.row}`,
+          direction: exterior.direction
+        });
+      }
+    }
   }
   // Add a sparse, deterministic set of non-walkable house clusters inside
   // every settlement. Roads are authored first, so they always remain open.

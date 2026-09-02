@@ -86,6 +86,9 @@ describe('heroic fantasy world generation', () => {
         if (settlement.kind === 'village') expect(settlement.gates).toHaveLength(0);
         const perimeterGates = settlement.gates.slice().sort((a, b) => a.row - b.row || a.col - b.col);
         for (const gate of perimeterGates) {
+          expect(tileAt(map, gate)?.kind).toBe('gate');
+          expect(tileAt(map, gate)?.walkable).toBe(true);
+          expect(tileAt(map, gate)?.settlementId).toBe(settlement.id);
           expect(gate.col === settlement.bounds.left || gate.col === settlement.bounds.right || gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom).toBe(true);
           expect((gate.col === settlement.bounds.left || gate.col === settlement.bounds.right) && (gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom)).toBe(false);
           const neighbors = [{ col: gate.col + 1, row: gate.row }, { col: gate.col - 1, row: gate.row }, { col: gate.col, row: gate.row + 1 }, { col: gate.col, row: gate.row - 1 }];
