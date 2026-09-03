@@ -1,9 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { createMap, tileAt } from './map';
+import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, tileAt, TILE_SIZE } from './map';
 import { findPath } from './pathfinding';
 import type { Tile } from './types';
 
 describe('heroic fantasy world generation', () => {
+  it('selects only viewport chunks with one guard chunk', () => {
+    const map = createMap();
+    const range = chunkRangeForViewport(map, { x: -CHUNK_SIZE * TILE_SIZE, y: 0 }, { width: 480, height: 480 });
+    expect(range).toEqual({ left: 0, top: 0, right: 2, bottom: 1 });
+    const centered = chunkRangeForViewport(map, { x: -1000, y: -700 }, { width: 480, height: 480 });
+    expect(centered.left).toBe(Math.max(0, Math.floor(1000 / (CHUNK_SIZE * TILE_SIZE)) - 1));
+    expect(centered.top).toBe(Math.max(0, Math.floor(700 / (CHUNK_SIZE * TILE_SIZE)) - 1));
+    expect(centered.right).toBe(Math.floor((1000 + 479) / (CHUNK_SIZE * TILE_SIZE)) + 1);
+    expect(centered.bottom).toBe(Math.floor((700 + 479) / (CHUNK_SIZE * TILE_SIZE)) + 1);
+  });
+
+  it('evicts generated tiles outside the streamed chunk window', () => {
+    const map = createMap();
+    tileAt(map, { col: 0, row: 0 });
+    tileAt(map, { col: CHUNK_SIZE, row: 0 });
+    expect(map.chunkCache?.size).toBe(2);
+    evictChunkCache(map, new Set(['0,0']));
+    expect([...map.chunkCache?.keys() ?? []]).toEqual(['0,0']);
+  });
+
   it('is deterministic and creates five complete realms', () => {
     const first = createMap();
     const second = createMap();

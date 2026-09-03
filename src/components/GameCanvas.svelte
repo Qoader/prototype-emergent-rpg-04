@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Application, Container, Graphics } from 'pixi.js';
-  import { CHUNK_SIZE, createMap, tileAt, TILE_SIZE } from '../game/map';
+  import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, tileAt, TILE_SIZE } from '../game/map';
   import { findPath, resolveDestination } from '../game/pathfinding';
   import { advanceMovement, createMovement } from '../game/movement';
   import { createPlayerSprite, type PlayerAnimation } from '../game/playerSprite';
@@ -20,6 +20,7 @@
   const movement = createMovement(map.spawn);
   onMount(() => {
     const app = new Application();
+    let initialized = false;
     const world = new Container();
     world.sortableChildren = true;
     const marker = new Graphics();
@@ -40,6 +41,7 @@
         resizeTo: host
       })
       .then(() => {
+        initialized = true;
         host.appendChild(app.canvas);
         canvas = app.canvas;
         canvas.dataset.testid = 'game-canvas';
@@ -85,27 +87,38 @@
           world.addChild(view);
           chunkViews.set(id, view);
         };
+        let lastChunkWindow = '';
         const syncChunks = () => {
-          const center = movement.tile;
-          const cx = Math.floor(center.col / CHUNK_SIZE), cy = Math.floor(center.row / CHUNK_SIZE);
-          // Keep the visible rectangle plus exactly one chunk of guard space.
-          // Chunk dimensions are large in screen pixels, so avoid a fixed
-          // multi-chunk radius that would eagerly draw a substantial world.
-          const radiusX = Math.ceil(host.clientWidth / (CHUNK_SIZE * TILE_SIZE * 2)) + 1;
-          const radiusY = Math.ceil(host.clientHeight / (CHUNK_SIZE * TILE_SIZE * 2)) + 1;
+          const range = chunkRangeForViewport(map, camera, {
+            width: host.clientWidth,
+            height: host.clientHeight
+          });
+          const windowId = `${range.left},${range.top},${range.right},${range.bottom}`;
           // eslint-disable-next-line svelte/prefer-svelte-reactivity
           const needed = new Set<string>();
-          for (let y = Math.max(0, cy - radiusY); y <= Math.min(Math.ceil(map.height / CHUNK_SIZE) - 1, cy + radiusY); y++)
-            for (let x = Math.max(0, cx - radiusX); x <= Math.min(Math.ceil(map.width / CHUNK_SIZE) - 1, cx + radiusX); x++) {
-              const id = `${x},${y}`; needed.add(id);
-              if (!chunkViews.has(id)) renderChunk(x, y);
+          for (let y = range.top; y <= range.bottom; y++)
+            for (let x = range.left; x <= range.right; x++) {
+              needed.add(`${x},${y}`);
             }
-          for (const [id, view] of chunkViews) if (!needed.has(id)) { view.destroy({ children: true }); chunkViews.delete(id); }
+          // Pathfinding can touch tiles beyond the rendered views. Keep that
+          // cache bounded even when the camera remains in the same window.
+          evictChunkCache(map, needed);
+          if (windowId === lastChunkWindow) return;
+          lastChunkWindow = windowId;
+          for (const id of needed) {
+            if (chunkViews.has(id)) continue;
+            const [x, y] = id.split(',').map(Number);
+            renderChunk(x, y);
+          }
+          for (const [id, view] of chunkViews)
+            if (!needed.has(id)) {
+              view.destroy({ children: true });
+              chunkViews.delete(id);
+            }
         };
-        syncChunks();
         actors.addChild(player.view);
         world.addChild(marker, actors);
-        const follow = () => {
+        const updateCamera = () => {
           camera.x = Math.min(
             0,
             Math.max(
@@ -121,6 +134,12 @@
             )
           );
           world.position.set(camera.x, camera.y);
+        };
+        // Calculate the initial camera before selecting the first render window.
+        updateCamera();
+        syncChunks();
+        const follow = () => {
+          updateCamera();
           syncChunks();
         };
         let animationTime = 0;
@@ -186,10 +205,13 @@
           movement.destination = destination;
           status = `Moving to column ${destination.col + 1}, row ${destination.row + 1}.`;
         });
+      })
+      .catch(() => {
+        status = 'Unable to load the map renderer. Please reload the page.';
       });
     return () => {
       if (locationTimer) clearTimeout(locationTimer);
-      app.destroy(true, { children: true, texture: true });
+      if (initialized) app.destroy(true, { children: true, texture: true });
     };
   });
 </script>

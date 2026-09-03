@@ -14,7 +14,9 @@ import type {
 export const TILE_SIZE = 48;
 export const MAP_WIDTH = 2048;
 export const MAP_HEIGHT = 2048;
-export const CHUNK_SIZE = 64;
+// Keep generated/rendered work small enough for mobile browsers. The world
+// itself is unchanged; chunks are only a streaming unit.
+export const CHUNK_SIZE = 16;
 export const GENERATOR_VERSION = 2;
 const blocked = new Set<TileKind>(['water', 'rock', 'hill', 'house', 'wall', 'tower']);
 const realms: Array<Omit<Country, 'id'>> = [
@@ -354,6 +356,35 @@ export function tileAt(map: WorldMap, point: Point): Tile | undefined {
   }
   c.set(id, tile);
   return tile;
+}
+
+/** Release generated tiles for chunks that are no longer streamed. */
+export function evictChunkCache(map: WorldMap, neededChunks: ReadonlySet<string>) {
+  for (const id of map.chunkCache?.keys() ?? []) {
+    if (!neededChunks.has(id)) map.chunkCache?.delete(id);
+  }
+}
+
+/** Return the chunk rectangle intersecting a viewport, plus guard chunks. */
+export function chunkRangeForViewport(
+  map: Pick<WorldMap, 'width' | 'height'>,
+  camera: { x: number; y: number },
+  viewport: { width: number; height: number },
+  guard = 1
+) {
+  const chunkPixels = CHUNK_SIZE * TILE_SIZE;
+  const maxCol = Math.ceil(map.width / CHUNK_SIZE) - 1;
+  const maxRow = Math.ceil(map.height / CHUNK_SIZE) - 1;
+  const left = Math.floor(Math.max(0, -camera.x) / chunkPixels) - guard;
+  const top = Math.floor(Math.max(0, -camera.y) / chunkPixels) - guard;
+  const right = Math.floor(Math.max(0, -camera.x + viewport.width - 1) / chunkPixels) + guard;
+  const bottom = Math.floor(Math.max(0, -camera.y + viewport.height - 1) / chunkPixels) + guard;
+  return {
+    left: Math.max(0, left),
+    top: Math.max(0, top),
+    right: Math.min(maxCol, right),
+    bottom: Math.min(maxRow, bottom)
+  };
 }
 export function clampPoint(map: WorldMap, point: Point): Point {
   return {
