@@ -154,6 +154,19 @@ describe('heroic fantasy world generation', () => {
     expect(map.features?.filter((feature) => feature.kind === 'frontier-marker').length).toBeGreaterThan(0);
   });
 
+  it('uses grass beneath roads and water beneath bridges', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      const routes = [...(map.overlays?.values() ?? [])].filter(
+        (tile) => tile.kind === 'road' || tile.kind === 'bridge'
+      );
+      expect(routes.length).toBeGreaterThan(0);
+      expect(routes.filter((tile) => tile.kind === 'road').every((tile) => tile.groundKind === 'grass')).toBe(true);
+      expect(routes.filter((tile) => tile.kind === 'bridge').every((tile) => tile.groundKind === 'water')).toBe(true);
+      expect(routes.every((tile) => tile.walkable)).toBe(true);
+    }
+  });
+
   it('never generates a two-tile-wide route block', () => {
     for (const seed of [1, 7331, 424242]) {
       const map = createMap(seed);

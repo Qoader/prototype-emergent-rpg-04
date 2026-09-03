@@ -1,7 +1,6 @@
 import type {
   CardinalDirection,
   Country,
-  GroundKind,
   Point,
   Settlement,
   SettlementKind,
@@ -209,38 +208,23 @@ export function createMap(seed = 7331): WorldMap {
         { seed, countries, width: MAP_WIDTH, height: MAP_HEIGHT } as WorldMap,
         point
       );
+      const bridge = old.kind === 'water';
       put(point, {
-        kind: old.kind === 'water' ? 'bridge' : 'road',
+        kind: bridge ? 'bridge' : 'road',
         walkable: true,
-        groundKind: old.kind as GroundKind
+        groundKind: bridge ? 'water' : 'grass'
       });
     };
     pave(p);
     let guard = 0;
     while (p.col !== b.col && guard++ < MAP_WIDTH + 4) {
       p = { col: p.col + Math.sign(b.col - p.col), row: p.row };
-      const old = baseTile(
-        { seed, countries, width: MAP_WIDTH, height: MAP_HEIGHT } as WorldMap,
-        p
-      );
-      put(p, {
-        kind: old.kind === 'water' ? 'bridge' : 'road',
-        walkable: true,
-        groundKind: old.kind as GroundKind
-      });
+      pave(p);
     }
     guard = 0;
     while (p.row !== b.row && guard++ < MAP_HEIGHT + 4) {
       p = { col: p.col, row: p.row + Math.sign(b.row - p.row) };
-      const old = baseTile(
-        { seed, countries, width: MAP_WIDTH, height: MAP_HEIGHT } as WorldMap,
-        p
-      );
-      put(p, {
-        kind: old.kind === 'water' ? 'bridge' : 'road',
-        walkable: true,
-        groundKind: old.kind as GroundKind
-      });
+      pave(p);
     }
     pave(p);
   };
