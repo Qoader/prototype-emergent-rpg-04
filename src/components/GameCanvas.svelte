@@ -9,6 +9,7 @@
     drawTileGround,
     drawTileOverhang,
     fortificationOrientation,
+    fortificationSectionZIndex,
     overhangZIndex
   } from '../game/tileIllustration';
   import type { Point } from '../game/types';
@@ -22,11 +23,10 @@
     const app = new Application();
     let initialized = false;
     const world = new Container();
-    world.sortableChildren = true;
+    const groundLayer = new Container();
     const marker = new Graphics();
-    marker.zIndex = -1;
-    const actors = new Container();
-    actors.sortableChildren = true;
+    const depthLayer = new Container();
+    depthLayer.sortableChildren = true;
     const player = createPlayerSprite();
     let camera = { x: 0, y: 0 };
     let canvas: HTMLCanvasElement;
@@ -46,34 +46,48 @@
         canvas = app.canvas;
         canvas.dataset.testid = 'game-canvas';
         app.stage.addChild(world);
-        // These are Pixi resource registries, not Svelte state.
+        type ChunkResources = { ground: Graphics; depth: Graphics[] };
+        // This is a Pixi resource registry, not Svelte state.
         // eslint-disable-next-line svelte/prefer-svelte-reactivity
-        const chunkViews = new Map<string, Container>();
+        const chunkResources = new Map<string, ChunkResources>();
         const renderChunk = (chunkCol: number, chunkRow: number) => {
           const id = `${chunkCol},${chunkRow}`;
-          const view = new Container();
           const ground = new Graphics();
           // eslint-disable-next-line svelte/prefer-svelte-reactivity
           const overhangRows = new Map<number, Graphics>();
+          const depth: Graphics[] = [];
           for (let row = chunkRow * CHUNK_SIZE; row < Math.min(map.height, (chunkRow + 1) * CHUNK_SIZE); row++)
             for (let col = chunkCol * CHUNK_SIZE; col < Math.min(map.width, (chunkCol + 1) * CHUNK_SIZE); col++) {
               const tile = tileAt(map, { col, row });
               if (!tile) continue;
               drawTileGround(ground, tile, map);
               if (!['forest', 'rock', 'hill', 'wall', 'gate', 'tower'].includes(tile.kind)) continue;
-              let layer = overhangRows.get(tile.row);
-              if (!layer) {
-                layer = new Graphics();
-                layer.zIndex = overhangZIndex(tile.row);
-                overhangRows.set(tile.row, layer);
-                view.addChild(layer);
-              }
               if (tile.kind === 'gate' && fortificationOrientation(tile, map) === 'vertical') {
-                drawTileOverhang(layer, tile, map, 'upper');
-                drawTileOverhang(layer, tile, map, 'lower');
-              } else drawTileOverhang(layer, tile, map);
+                // A vertical gate has a passable opening between its two
+                // sections, so each section needs its own depth position.
+                const upper = new Graphics();
+                upper.zIndex = fortificationSectionZIndex(tile.row, 'upper');
+                drawTileOverhang(upper, tile, map, 'upper');
+                depthLayer.addChild(upper);
+                depth.push(upper);
+                const lower = new Graphics();
+                lower.zIndex = fortificationSectionZIndex(tile.row, 'lower');
+                drawTileOverhang(lower, tile, map, 'lower');
+                depthLayer.addChild(lower);
+                depth.push(lower);
+              } else {
+                let layer = overhangRows.get(tile.row);
+                if (!layer) {
+                  layer = new Graphics();
+                  layer.zIndex = overhangZIndex(tile.row);
+                  overhangRows.set(tile.row, layer);
+                  depthLayer.addChild(layer);
+                  depth.push(layer);
+                }
+                drawTileOverhang(layer, tile, map);
+              }
             }
-          view.addChildAt(ground, 0);
+          groundLayer.addChild(ground);
           for (const feature of map.features ?? []) {
             if (Math.floor(feature.col / CHUNK_SIZE) !== chunkCol || Math.floor(feature.row / CHUNK_SIZE) !== chunkRow) continue;
             const landmark = new Graphics();
@@ -81,11 +95,10 @@
             const y = feature.row * TILE_SIZE + 24;
             landmark.rect(x - 4, y - 18, 8, 36).fill('#d5c294').circle(x, y - 20, 8).fill('#d5c294');
             landmark.zIndex = feature.row * TILE_SIZE + TILE_SIZE;
-            view.addChild(landmark);
+            depthLayer.addChild(landmark);
+            depth.push(landmark);
           }
-          view.sortableChildren = true;
-          world.addChild(view);
-          chunkViews.set(id, view);
+          chunkResources.set(id, { ground, depth });
         };
         let lastChunkWindow = '';
         const syncChunks = () => {
@@ -106,18 +119,19 @@
           if (windowId === lastChunkWindow) return;
           lastChunkWindow = windowId;
           for (const id of needed) {
-            if (chunkViews.has(id)) continue;
+            if (chunkResources.has(id)) continue;
             const [x, y] = id.split(',').map(Number);
             renderChunk(x, y);
           }
-          for (const [id, view] of chunkViews)
+          for (const [id, resources] of chunkResources)
             if (!needed.has(id)) {
-              view.destroy({ children: true });
-              chunkViews.delete(id);
+              resources.ground.destroy();
+              for (const item of resources.depth) item.destroy();
+              chunkResources.delete(id);
             }
         };
-        actors.addChild(player.view);
-        world.addChild(marker, actors);
+        depthLayer.addChild(player.view);
+        world.addChild(groundLayer, marker, depthLayer);
         const updateCamera = () => {
           camera.x = Math.min(
             0,

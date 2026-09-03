@@ -51,6 +51,14 @@ describe('terrain overhangs', () => {
     expect(fortificationSectionZIndex(3, 'upper')).toBe(3 * 48 - 1);
     expect(fortificationSectionZIndex(3, 'lower')).toBe(4 * 48 - 1);
   });
+
+  it('keeps depth relationships stable for a player standing in the gate row', () => {
+    const playerDepth = 3 * 48;
+    expect(fortificationSectionZIndex(3, 'upper')).toBeLessThan(playerDepth);
+    expect(playerDepth).toBeLessThan(fortificationSectionZIndex(3, 'lower'));
+    expect(overhangZIndex(2)).toBeLessThan(playerDepth);
+    expect(overhangZIndex(3)).toBeGreaterThan(playerDepth);
+  });
 });
 
 describe('fortification context', () => {
