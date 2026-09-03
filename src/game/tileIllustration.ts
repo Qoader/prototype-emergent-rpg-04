@@ -1,6 +1,6 @@
 import { Graphics } from 'pixi.js';
 import type { FillInput } from 'pixi.js';
-import type { CardinalDirection, Country, GroundKind, Tile, TileKind, WorldMap } from './types';
+import type { Country, GroundKind, Tile, TileKind, WorldMap } from './types';
 import { TILE_SIZE, tileAt } from './map';
 
 const PATH_WIDTH = 26;
@@ -12,7 +12,7 @@ const variation = (col: number, row: number) => Math.abs((col * 13 + row * 7) % 
 const isRoute = (kind: TileKind | undefined) => kind === 'road' || kind === 'bridge' || kind === 'gate';
 
 export type RouteConnections = { north: boolean; east: boolean; south: boolean; west: boolean };
-export type FortificationOrientation = 'horizontal' | 'vertical' | 'corner';
+export type FortificationOrientation = 'horizontal' | 'vertical' | 'corner-northwest' | 'corner-northeast' | 'corner-southwest' | 'corner-southeast';
 export type FortificationSection = 'all' | 'upper' | 'lower';
 
 export const isOverhangingTerrain = (kind: TileKind): kind is Extract<TileKind, 'forest' | 'rock' | 'hill' | 'wall' | 'gate' | 'tower'> => kind === 'forest' || kind === 'rock' || kind === 'hill' || kind === 'wall' || kind === 'gate' || kind === 'tower';
@@ -41,7 +41,12 @@ export function fortificationOrientation(tile: Tile, map?: WorldMap): Fortificat
     const { left, top, right, bottom } = settlement.bounds;
     const horizontal = tile.row === top || tile.row === bottom;
     const vertical = tile.col === left || tile.col === right;
-    if (horizontal && vertical) return 'corner';
+    if (horizontal && vertical) {
+      if (tile.col === left && tile.row === top) return 'corner-northwest';
+      if (tile.col === right && tile.row === top) return 'corner-northeast';
+      if (tile.col === left && tile.row === bottom) return 'corner-southwest';
+      return 'corner-southeast';
+    }
     if (horizontal) return 'horizontal';
     if (vertical) return 'vertical';
   }
@@ -102,10 +107,19 @@ function drawFlag(graphics: Graphics, x: number, y: number, country: Pick<Countr
   graphics.poly([x + 2, y - 8, x + 12, y - 5, x + 2, y - 4]).fill(country.banner);
 }
 
-function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, direction: CardinalDirection = 'south', orientation: FortificationOrientation = 'horizontal', country: Pick<Country, 'color' | 'banner'> = neutralCountry, section: FortificationSection = 'all'): void {
+function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 'gate' | 'tower'>, ox: number, oy: number, orientation: FortificationOrientation = 'horizontal', country: Pick<Country, 'color' | 'banner'> = neutralCountry, section: FortificationSection = 'all'): void {
   const stone = kind === 'tower' ? '#5f5d58' : '#77736b'; const cap = kind === 'tower' ? '#464640' : '#5f5d57';
   if (kind === 'tower') { graphics.rect(ox + 8, oy - 30, 32, 14).fill(stone); graphics.rect(ox + 12, oy - 38, 24, 9).fill(cap); graphics.rect(ox + 18, oy - 8, 12, 14).fill('#3d3b38'); return; }
   const horizontal = orientation === 'horizontal';
+  const corner = orientation.startsWith('corner-') && kind === 'wall';
+  const drawHorizontal = (start: number, end: number) => {
+    graphics.rect(ox + start, oy - 18, end - start, 34).fill(stone); graphics.rect(ox + start, oy - 18, end - start, 6).fill(cap);
+    for (let x = start + 6; x < end; x += 12) graphics.rect(ox + x, oy - 25, 6, 7).fill(cap);
+  };
+  const drawVertical = (start: number, end: number) => {
+    graphics.rect(ox + 17, oy - 24 + start, 14, end - start).fill(stone); graphics.rect(ox + 14, oy - 24 + start, 20, 6).fill(cap);
+    for (let y = start + 6; y < end; y += 12) graphics.rect(ox + 14, oy - 24 + y, 6, 6).fill(cap);
+  };
   const drawWall = () => {
     if (horizontal) {
       // Horizontal sections are edge-to-edge sprites. Keeping the body and
@@ -117,7 +131,13 @@ function drawFortification(graphics: Graphics, kind: Extract<TileKind, 'wall' | 
       for (let y = -18; y < 22; y += 12) graphics.rect(ox + 14, oy + y, 6, 6).fill(cap);
     }
   };
-  if (orientation === 'corner' && kind === 'wall') { drawWall(); drawFortification(graphics, kind, ox, oy, direction, 'vertical', country); return; }
+  if (corner) {
+    const east = orientation.endsWith('northwest') || orientation.endsWith('southwest');
+    const south = orientation.endsWith('northwest') || orientation.endsWith('northeast');
+    drawHorizontal(east ? 24 : 0, east ? 48 : 24);
+    drawVertical(south ? 24 : 0, south ? 48 : 24);
+    return;
+  }
   if (kind === 'wall') { drawWall(); return; }
   if (horizontal) {
     graphics.rect(ox, oy - 18, 11, 34).fill(stone); graphics.rect(ox + 37, oy - 18, 11, 34).fill(stone); graphics.rect(ox, oy - 18, 11, 6).fill(cap); graphics.rect(ox + 37, oy - 18, 11, 6).fill(cap);
@@ -181,10 +201,8 @@ export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap,
   const ox = tile.col * TILE_SIZE; const oy = tile.row * TILE_SIZE;
   if (tile.kind === 'forest' || tile.kind === 'rock' || tile.kind === 'hill') drawOverhang(graphics, tile.kind, ox, oy - TILE_SIZE / 2);
   else {
-    const gate = settlementFor(tile, map)?.gates.find((candidate) => candidate.col === tile.col && candidate.row === tile.row);
-    const direction = gate?.direction ?? 'south';
     const orientation = tile.kind === 'tower' ? 'horizontal' : fortificationOrientation(tile, map);
-    drawFortification(graphics, tile.kind, ox, oy, direction, orientation, fortificationPalette(tile, map), section);
+    drawFortification(graphics, tile.kind, ox, oy, orientation, fortificationPalette(tile, map), section);
   }
 }
 

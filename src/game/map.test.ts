@@ -109,6 +109,22 @@ describe('heroic fantasy world generation', () => {
           expect(tile?.settlementId).toBe(settlement.id);
         }
       }
+      for (const settlement of settlements.filter((place) => place.kind !== 'village')) {
+        const corners = [
+          { col: settlement.bounds.left, row: settlement.bounds.top },
+          { col: settlement.bounds.right, row: settlement.bounds.top },
+          { col: settlement.bounds.left, row: settlement.bounds.bottom },
+          { col: settlement.bounds.right, row: settlement.bounds.bottom }
+        ];
+        for (const corner of corners) {
+          const tile = tileAt(map, corner);
+          expect(tile?.kind).toBe(settlement.kind === 'capital' ? 'tower' : 'wall');
+          expect(tile?.walkable).toBe(false);
+          expect(tile?.settlementId).toBe(settlement.id);
+        }
+        for (const gate of settlement.gates)
+          expect(corners.some((corner) => corner.col === gate.col && corner.row === gate.row)).toBe(false);
+      }
     }
   });
 

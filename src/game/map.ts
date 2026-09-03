@@ -270,8 +270,10 @@ export function createMap(seed = 7331): WorldMap {
             x === s.bounds.right ||
             y === s.bounds.top ||
             y === s.bounds.bottom)
-        )
-          put({ col: x, row: y }, { kind: 'wall', walkable: false, settlementId: s.id });
+        ) {
+          const corner = (x === s.bounds.left || x === s.bounds.right) && (y === s.bounds.top || y === s.bounds.bottom);
+          put({ col: x, row: y }, { kind: corner && s.kind === 'capital' ? 'tower' : 'wall', walkable: false, settlementId: s.id });
+        }
   }
   // Reopen the authored road corridors after fortification walls are applied.
   // This preserves a guaranteed traversable spine through every settlement.
@@ -279,6 +281,17 @@ export function createMap(seed = 7331): WorldMap {
     const a = settlements.find((s) => s.id === road.settlementIds[0]);
     const b = settlements.find((s) => s.id === road.settlementIds[1]);
     if (a && b) route(a, b);
+  }
+  // Corners are authoritative fortifications: authored routes must not open them.
+  for (const s of settlements.filter((q) => q.kind !== 'village')) {
+    for (const point of [
+      { col: s.bounds.left, row: s.bounds.top },
+      { col: s.bounds.right, row: s.bounds.top },
+      { col: s.bounds.left, row: s.bounds.bottom },
+      { col: s.bounds.right, row: s.bounds.bottom }
+    ]) {
+      put(point, { kind: s.kind === 'capital' ? 'tower' : 'wall', walkable: false, settlementId: s.id });
+    }
   }
   // Derive gates from the final road topology so metadata matches rendered tiles.
   const isRoute = (point: Point) => {

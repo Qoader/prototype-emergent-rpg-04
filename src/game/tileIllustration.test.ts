@@ -69,8 +69,28 @@ describe('fortification context', () => {
   it('resolves perimeter and corner orientations', () => {
     expect(fortificationOrientation({ col: 5, row: 2, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('horizontal');
     expect(fortificationOrientation({ col: 2, row: 5, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('vertical');
-    expect(fortificationOrientation({ col: 2, row: 2, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('corner');
+    expect(fortificationOrientation({ col: 2, row: 2, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('corner-northwest');
+    expect(fortificationOrientation({ col: 8, row: 2, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('corner-northeast');
+    expect(fortificationOrientation({ col: 2, row: 8, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('corner-southwest');
+    expect(fortificationOrientation({ col: 8, row: 8, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe('corner-southeast');
     expect(fortificationOrientation({ col: 8, row: 5, kind: 'gate', walkable: true, settlementId: settlement.id }, map)).toBe('vertical');
+  });
+
+  it('renders each city corner with only its inward horizontal and vertical arms', () => {
+    const corners = [
+      { col: 2, row: 2, orientation: 'corner-northwest', minX: 2 * 48 + 14, maxX: 2 * 48 + 48, maxY: 2 * 48 + 24 },
+      { col: 8, row: 2, orientation: 'corner-northeast', minX: 8 * 48, maxX: 8 * 48 + 34, maxY: 2 * 48 + 24 },
+      { col: 2, row: 8, orientation: 'corner-southwest', minX: 2 * 48 + 14, maxX: 2 * 48 + 48, maxY: 8 * 48 + 16 },
+      { col: 8, row: 8, orientation: 'corner-southeast', minX: 8 * 48, maxX: 8 * 48 + 34, maxY: 8 * 48 + 16 }
+    ] as const;
+    for (const corner of corners) {
+      const graphics = new Graphics();
+      drawTileOverhang(graphics, { col: corner.col, row: corner.row, kind: 'wall', walkable: false, settlementId: settlement.id }, map);
+      expect(fortificationOrientation({ col: corner.col, row: corner.row, kind: 'wall', walkable: false, settlementId: settlement.id }, map)).toBe(corner.orientation);
+      expect(graphics.bounds.minX).toBe(corner.minX);
+      expect(graphics.bounds.maxX).toBe(corner.maxX);
+      expect(graphics.bounds.maxY).toBe(corner.maxY);
+    }
   });
 
   it('infers orientation and uses neutral palette without metadata', () => {
