@@ -45,7 +45,7 @@ describe('heroic fantasy world generation', () => {
       coastal: { water: 0.18, sand: 0.1, flower: 0.14, grass: 0.58 },
       marches: { sand: 0.18, flower: 0.15, hill: 0.1, grass: 0.57 }
     };
-    expect(GENERATOR_VERSION).toBe(3);
+    expect(GENERATOR_VERSION).toBe(4);
     for (const seed of [1, 7331, 424242]) {
       const map = createMap(seed);
       for (let countryIndex = 0; countryIndex < 5; countryIndex += 1) {
@@ -198,5 +198,59 @@ describe('heroic fantasy world generation', () => {
       expect(settlement.bounds.top).toBeGreaterThanOrEqual(3);
       expect(settlement.bounds.bottom).toBeLessThan(map.height - 3);
     }
+  });
+
+  it('selects the exact eligible housing density and preserves plazas/routes', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      for (const settlement of map.settlements ?? []) {
+        const plazaRadius = settlement.kind === 'capital' ? 2 : settlement.kind === 'city' ? 1 : -1;
+        const route = (col: number, row: number) => {
+          const kind = tileAt(map, { col, row })?.kind;
+          return kind === 'road' || kind === 'bridge' || kind === 'gate';
+        };
+        const eligible: Tile[] = [];
+        const houses: Tile[] = [];
+        for (let row = settlement.bounds.top + 1; row < settlement.bounds.bottom; row++) for (let col = settlement.bounds.left + 1; col < settlement.bounds.right; col++) {
+          const tile = tileAt(map, { col, row })!;
+          const plaza = plazaRadius >= 0 && Math.abs(col - settlement.col) <= plazaRadius && Math.abs(row - settlement.row) <= plazaRadius;
+          if (!plaza && !route(col, row) && tile.kind !== 'wall' && tile.kind !== 'tower') eligible.push(tile);
+          if (tile.kind === 'house') houses.push(tile);
+        }
+        expect(houses).toHaveLength(Math.floor(eligible.length * 0.35));
+        expect(houses.every((tile) => !tile.walkable)).toBe(true);
+        for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row++) for (let col = settlement.bounds.left; col <= settlement.bounds.right; col++) {
+          const tile = tileAt(map, { col, row });
+          if (route(col, row)) expect(tile?.kind).not.toBe('house');
+          if (plazaRadius >= 0 && Math.abs(col - settlement.col) <= plazaRadius && Math.abs(row - settlement.row) <= plazaRadius) expect(tile?.kind).not.toBe('house');
+        }
+      }
+    }
+  });
+
+  it('keeps housing deterministic while producing route-biased, clustered layouts', () => {
+    const maps = [1, 7331, 424242].map((seed) => createMap(seed));
+    expect(maps[0]).toEqual(createMap(1));
+    const distances: number[] = [];
+    let adjacent = 0;
+    let houseTotal = 0;
+    for (const map of maps) for (const settlement of map.settlements ?? []) {
+      const routes: Array<{ col: number; row: number }> = [];
+      const houses: Tile[] = [];
+      for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row++) for (let col = settlement.bounds.left; col <= settlement.bounds.right; col++) {
+        const tile = tileAt(map, { col, row });
+        if (tile?.kind === 'road' || tile?.kind === 'bridge' || tile?.kind === 'gate') routes.push({ col, row });
+        if (tile?.kind === 'house') houses.push(tile);
+      }
+      if (!routes.length) continue;
+      houseTotal += houses.length;
+      for (const house of houses) {
+        distances.push(Math.min(...routes.map((route) => Math.abs(route.col - house.col) + Math.abs(route.row - house.row))));
+        if (houses.some((other) => Math.abs(other.col - house.col) + Math.abs(other.row - house.row) === 1)) adjacent++;
+      }
+    }
+    expect(distances.reduce((sum, distance) => sum + distance, 0) / distances.length).toBeLessThan(8);
+    expect(distances.some((distance) => distance >= 6)).toBe(true);
+    expect(adjacent / houseTotal).toBeGreaterThan(0.35);
   });
 });

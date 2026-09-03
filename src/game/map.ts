@@ -17,7 +17,7 @@ export const MAP_HEIGHT = 2048;
 // Keep generated/rendered work small enough for mobile browsers. The world
 // itself is unchanged; chunks are only a streaming unit.
 export const CHUNK_SIZE = 16;
-export const GENERATOR_VERSION = 3;
+export const GENERATOR_VERSION = 4;
 const blocked = new Set<TileKind>(['water', 'rock', 'hill', 'house', 'wall', 'tower']);
 const realms: Array<Omit<Country, 'id'>> = [
   { name: 'Alderwyn', theme: 'highland', color: '#b95747', banner: '#f0c674' },
@@ -66,6 +66,20 @@ const hash = (seed: number, col: number, row: number) => {
   let h = (seed ^ (col * 374761393) ^ (row * 668265263) ^ (GENERATOR_VERSION * 1442695041)) >>> 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
   return ((h ^ (h >>> 16)) >>> 0) / 0x100000000;
+};
+// Value noise keeps nearby tiles related (and therefore makes house groups
+// read as clusters) while remaining cheap and fully deterministic.
+const smooth = (value: number) => value * value * (3 - 2 * value);
+const clusteredNoise = (seed: number, col: number, row: number) => {
+  const scale = 4;
+  const gx = Math.floor(col / scale);
+  const gy = Math.floor(row / scale);
+  const tx = smooth((col - gx * scale) / scale);
+  const ty = smooth((row - gy * scale) / scale);
+  const at = (x: number, y: number) => hash(seed + 0x51ed270b, x * 17, y * 31);
+  const north = at(gx, gy) * (1 - tx) + at(gx + 1, gy) * tx;
+  const south = at(gx, gy + 1) * (1 - tx) + at(gx + 1, gy + 1) * tx;
+  return north * (1 - ty) + south * ty;
 };
 function baseTile(map: WorldMap, p: Point): Tile {
   const country = map.countries?.[Math.min(4, Math.floor(p.col / (MAP_WIDTH / 5)))] ?? realms[0] as Country;
@@ -190,6 +204,18 @@ export function createMap(seed = 7331): WorldMap {
   });
   const route = (a: Point, b: Point) => {
     let p = { ...a };
+    const pave = (point: Point) => {
+      const old = baseTile(
+        { seed, countries, width: MAP_WIDTH, height: MAP_HEIGHT } as WorldMap,
+        point
+      );
+      put(point, {
+        kind: old.kind === 'water' ? 'bridge' : 'road',
+        walkable: true,
+        groundKind: old.kind as GroundKind
+      });
+    };
+    pave(p);
     let guard = 0;
     while (p.col !== b.col && guard++ < MAP_WIDTH + 4) {
       p = { col: p.col + Math.sign(b.col - p.col), row: p.row };
@@ -216,6 +242,7 @@ export function createMap(seed = 7331): WorldMap {
         groundKind: old.kind as GroundKind
       });
     }
+    pave(p);
   };
   const connect = (a: Settlement, b: Settlement) => {
     roads.push({ id: `road-${roads.length}`, settlementIds: [a.id, b.id] });
@@ -307,17 +334,39 @@ export function createMap(seed = 7331): WorldMap {
       }
     }
   }
-  // Add a sparse, deterministic set of non-walkable house clusters inside
-  // every settlement. Roads are authored first, so they always remain open.
+  // Select exactly 35% of the eligible interior for houses. Roads are fully
+  // authored before this pass, so every route tile is protected. A route bias
+  // makes homes tend toward streets without making remote lots impossible;
+  // smooth noise and a small jitter produce irregular, coherent clusters.
   for (const settlement of settlements) {
     const { left, right, top, bottom } = settlement.bounds;
-    for (let row = top + 3; row <= bottom - 3; row += 4) {
-      for (let col = left + 3; col <= right - 3; col += 4) {
-        if (Math.abs(col - settlement.col) <= 2 || Math.abs(row - settlement.row) <= 2) continue;
-        const existing = overlays.get(k({ col, row }));
-        if (existing?.kind === 'road' || existing?.kind === 'bridge' || existing?.kind === 'gate') continue;
-        put({ col, row }, { kind: 'house', walkable: false, settlementId: settlement.id });
-      }
+    const isPlaza = (col: number, row: number) => {
+      if (settlement.kind === 'village') return false;
+      const radius = settlement.kind === 'capital' ? 2 : 1;
+      return Math.abs(col - settlement.col) <= radius && Math.abs(row - settlement.row) <= radius;
+    };
+    const routeKinds = new Set<TileKind>(['road', 'bridge', 'gate']);
+    const sources: Point[] = [];
+    for (let row = top; row <= bottom; row++) for (let col = left; col <= right; col++) {
+      if (routeKinds.has(overlays.get(k({ col, row }))?.kind as TileKind)) sources.push({ col, row });
+    }
+    const candidates: Array<{ point: Point; score: number }> = [];
+    for (let row = top + 1; row <= bottom - 1; row++) for (let col = left + 1; col <= right - 1; col++) {
+      if (isPlaza(col, row)) continue;
+      const existing = overlays.get(k({ col, row }));
+      if (existing && (routeKinds.has(existing.kind) || existing.kind === 'wall' || existing.kind === 'tower')) continue;
+      let distance = 0x7fffffff;
+      for (const source of sources) distance = Math.min(distance, Math.abs(col - source.col) + Math.abs(row - source.row));
+      // If a settlement has no route source, all lots get the same neutral bias.
+      const routeScore = sources.length ? 1 / (distance + 1) : 0;
+      const noise = clusteredNoise(seed + settlement.id.length * 7919, col, row);
+      const jitter = hash(seed ^ 0x9e3779b9, col, row) * 0.08;
+      candidates.push({ point: { col, row }, score: noise * 0.72 + routeScore * 0.9 + jitter });
+    }
+    const houseCount = Math.floor(candidates.length * 0.35);
+    candidates.sort((a, b) => b.score - a.score || a.point.row - b.point.row || a.point.col - b.point.col);
+    for (const candidate of candidates.slice(0, houseCount)) {
+      put(candidate.point, { kind: 'house', walkable: false, settlementId: settlement.id });
     }
   }
   for (let i = 1; i < 5; i++)
