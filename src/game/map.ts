@@ -17,7 +17,7 @@ export const MAP_HEIGHT = 2048;
 // Keep generated/rendered work small enough for mobile browsers. The world
 // itself is unchanged; chunks are only a streaming unit.
 export const CHUNK_SIZE = 16;
-export const GENERATOR_VERSION = 2;
+export const GENERATOR_VERSION = 3;
 const blocked = new Set<TileKind>(['water', 'rock', 'hill', 'house', 'wall', 'tower']);
 const realms: Array<Omit<Country, 'id'>> = [
   { name: 'Alderwyn', theme: 'highland', color: '#b95747', banner: '#f0c674' },
@@ -65,7 +65,7 @@ const k = (p: Point) => `${p.col},${p.row}`;
 const hash = (seed: number, col: number, row: number) => {
   let h = (seed ^ (col * 374761393) ^ (row * 668265263) ^ (GENERATOR_VERSION * 1442695041)) >>> 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
-  return (h ^ (h >>> 16)) / 0x100000000;
+  return ((h ^ (h >>> 16)) >>> 0) / 0x100000000;
 };
 function baseTile(map: WorldMap, p: Point): Tile {
   const country = map.countries?.[Math.min(4, Math.floor(p.col / (MAP_WIDTH / 5)))] ?? realms[0] as Country;

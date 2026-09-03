@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, tileAt, TILE_SIZE } from './map';
+import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, GENERATOR_VERSION, tileAt, TILE_SIZE } from './map';
 import { findPath } from './pathfinding';
 import type { Tile } from './types';
 
@@ -34,6 +34,64 @@ describe('heroic fantasy world generation', () => {
       expect(places.filter((place) => place.kind === 'capital')).toHaveLength(1);
       expect(places.filter((place) => place.kind === 'city').length).toBeGreaterThanOrEqual(2);
       expect(places.filter((place) => place.kind === 'village').length).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('uses the full configured terrain distribution in every wilderness biome', () => {
+    const expected: Record<string, Record<string, number>> = {
+      highland: { rock: 0.11, hill: 0.23, forest: 0.16, grass: 0.5 },
+      forest: { forest: 0.52, flower: 0.14, water: 0.06, grass: 0.28 },
+      river: { water: 0.14, flower: 0.14, forest: 0.11, grass: 0.61 },
+      coastal: { water: 0.18, sand: 0.1, flower: 0.14, grass: 0.58 },
+      marches: { sand: 0.18, flower: 0.15, hill: 0.1, grass: 0.57 }
+    };
+    expect(GENERATOR_VERSION).toBe(3);
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      for (let countryIndex = 0; countryIndex < 5; countryIndex += 1) {
+        const country = map.countries![countryIndex]!;
+        const counts = new Map<string, number>();
+        let total = 0;
+        const left = Math.floor(countryIndex * map.width / 5) + 75;
+        const right = left + 255;
+        for (let row = 100; row < 356; row += 1) {
+          for (let col = left; col <= right; col += 1) {
+            const point = { col, row };
+            // Authored settlement/road tiles are overlays, not wilderness.
+            if (map.overlays?.has(`${col},${row}`)) continue;
+            const kind = tileAt(map, point)?.kind;
+            if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+            total += 1;
+          }
+        }
+        expect(total).toBeGreaterThan(60000);
+        for (const [kind, target] of Object.entries(expected[country.theme]!)) {
+          const actual = (counts.get(kind) ?? 0) / total;
+          expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
+          expect(actual).toBeGreaterThanOrEqual(target - 0.03);
+          expect(actual).toBeLessThanOrEqual(target + 0.03);
+        }
+        expect([...counts.keys()].sort()).toEqual(Object.keys(expected[country.theme]!).sort());
+      }
+    }
+  });
+
+  it('regenerates evicted chunks deterministically and keeps world edges water', () => {
+    const map = createMap(424242);
+    const point = { col: 1000, row: 1000 };
+    const before = tileAt(map, point);
+    expect(before).toBeDefined();
+    evictChunkCache(map, new Set());
+    expect(tileAt(map, point)).toEqual(before);
+    for (const point of [
+      { col: 0, row: 1000 },
+      { col: 2, row: 1000 },
+      { col: 1000, row: 0 },
+      { col: 1000, row: 2 },
+      { col: map.width - 1, row: 1000 },
+      { col: 1000, row: map.height - 1 }
+    ]) {
+      expect(tileAt(map, point)?.kind).toBe('water');
     }
   });
 
