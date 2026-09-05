@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findPath, reachableTiles, resolveDestination } from './pathfinding';
+import { findPath, planNavigation, reachableTiles, resolveDestination } from './pathfinding';
 import type { Tile, WorldMap } from './types';
 
 const makeMap = (rows: string[]): WorldMap => ({ width: rows[0].length, height: rows.length, spawn: { col: 0, row: 0 }, tiles: rows.flatMap((line, row) => [...line].map((char, col) => ({ col, row, kind: char === '#' ? 'rock' : 'grass', walkable: char !== '#' } as Tile))) });
@@ -30,5 +30,17 @@ describe('pathfinding', () => {
     const map = makeMap(['.....', '.....', '.....']);
     expect(resolveDestination(map, { col: 0, row: 1 }, { col: 99, row: 99 })).toEqual({ col: 4, row: 2 });
     expect(resolveDestination(makeMap(['...', '.#.', '...']), { col: 1, row: 1 }, { col: 1, row: 1 })).toBeNull();
+  });
+
+  it('returns a route that stays within the bounded request window', () => {
+    const map = makeMap(Array.from({ length: 140 }, () => '.'.repeat(140)));
+    const result = planNavigation(map, { col: 70, row: 70 }, { col: 139, row: 139 });
+    expect(result).not.toBeNull();
+    for (const point of result!.route) {
+      expect(point.col).toBeGreaterThanOrEqual(6);
+      expect(point.col).toBeLessThanOrEqual(134);
+      expect(point.row).toBeGreaterThanOrEqual(6);
+      expect(point.row).toBeLessThanOrEqual(134);
+    }
   });
 });

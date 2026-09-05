@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test';
 
-test('loads and accepts a touch destination', async ({ page }) => {
+test('loads and accepts a destination input', async ({ page }, testInfo) => {
   await page.goto('/');
   await expect(page.getByTestId('game-canvas')).toBeVisible();
   await expect(page.getByTestId('player-status')).toContainText('Ready');
-  await page.getByTestId('game-canvas').tap({ position: { x: 250, y: 400 } });
+  const canvas = page.getByTestId('game-canvas');
+  if (testInfo.project.use.hasTouch) {
+    await canvas.tap({ position: { x: 250, y: 400 } });
+  } else {
+    await canvas.click({ position: { x: 250, y: 400 } });
+  }
   await expect(page.getByTestId('player-status')).toContainText('Moving to');
 });
 

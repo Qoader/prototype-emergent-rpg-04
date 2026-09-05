@@ -1,7 +1,7 @@
-import { findPath, resolveDestination } from './pathfinding';
+import { planNavigation } from './pathfinding';
 import { advanceMovement, createMovement } from './movement';
-import type { Point, WorldMap } from './types';
-import { TILE_SIZE } from './map';
+import type { Point, TileReader, WorldMap } from './types';
+import { acceptsPointer, tilePointFromPointer } from './input';
 
 export type PointerInput = {
   clientX: number;
@@ -13,23 +13,20 @@ export type PointerInput = {
 };
 
 /** Gameplay state boundary used by the renderer and by integration tests. */
-export function createGameController(map: WorldMap) {
+export function createGameController(map: WorldMap, tiles?: TileReader) {
   const movement = createMovement(map.spawn);
 
   const requestDestination = (requested: Point) => {
-    const destination = resolveDestination(map, movement.tile, requested);
-    if (!destination) return null;
-    movement.route = findPath(map, movement.tile, destination) ?? [];
-    movement.destination = destination;
-    return destination;
+    const plan = planNavigation(tiles ?? map, movement.tile, requested);
+    if (!plan) return null;
+    movement.route = plan.route;
+    movement.destination = plan.destination;
+    return plan.destination;
   };
 
   const pointerDown = (input: PointerInput) => {
-    if (input.pointerType === 'mouse' && input.button !== 0) return null;
-    return requestDestination({
-      col: Math.floor((input.clientX - input.rect.left - input.camera.x) / TILE_SIZE),
-      row: Math.floor((input.clientY - input.rect.top - input.camera.y) / TILE_SIZE)
-    });
+    if (!acceptsPointer(input.pointerType, input.button)) return null;
+    return requestDestination(tilePointFromPointer(input));
   };
 
   const tick = (deltaSeconds: number) => advanceMovement(movement, deltaSeconds);

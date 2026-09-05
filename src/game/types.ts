@@ -22,6 +22,13 @@ export type Tile = Point & {
   settlementId?: string;
 };
 
+/** Read-only tile capability consumed by navigation and rendering. */
+export type TileReader = {
+  readonly width: number;
+  readonly height: number;
+  getTile(point: Readonly<Point>): Readonly<Tile> | undefined;
+};
+
 export type RealmTheme = 'highland' | 'forest' | 'river' | 'coastal' | 'marches';
 export type Country = {
   id: string;
