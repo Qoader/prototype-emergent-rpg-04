@@ -90,6 +90,7 @@ export function findPath(
   return null;
 }
 export function resolveDestination(map: WorldMap, start: Point, requested: Point): Point | null {
+  if (!tileAt(map, start)?.walkable) return null;
   const dx = requested.col - start.col;
   const dy = requested.row - start.row;
   const length = Math.hypot(dx, dy);

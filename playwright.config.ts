@@ -5,9 +5,9 @@ export default defineConfig({
   fullyParallel: true,
   reporter: 'html',
   use: { baseURL: 'http://127.0.0.1:4173/prototype-emergent-rpg-04/', trace: 'retain-on-failure' },
-  webServer: { command: 'pnpm preview --host 127.0.0.1', url: 'http://127.0.0.1:4173/prototype-emergent-rpg-04/', reuseExistingServer: !process.env.CI },
+  webServer: { command: 'pnpm build && pnpm preview --host 127.0.0.1 --strictPort', url: 'http://127.0.0.1:4173/prototype-emergent-rpg-04/', reuseExistingServer: !process.env.CI },
   projects: [
-    { name: 'chromium', use: { ...devices['iPhone 13'] } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'], hasTouch: true } },
     { name: 'webkit', use: { ...devices['iPhone 13'] } }
   ]

@@ -2,8 +2,7 @@
   import { onMount } from 'svelte';
   import { Application, Container, Graphics } from 'pixi.js';
   import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, tileAt, TILE_SIZE } from '../game/map';
-  import { findPath, resolveDestination } from '../game/pathfinding';
-  import { advanceMovement, createMovement } from '../game/movement';
+  import { createGameController } from '../game/gameController';
   import { createPlayerSprite, type PlayerAnimation } from '../game/playerSprite';
   import {
     drawTileGround,
@@ -12,13 +11,13 @@
     fortificationSectionZIndex,
     overhangZIndex
   } from '../game/tileIllustration';
-  import type { Point } from '../game/types';
 
   let host: HTMLElement;
   let status = 'Ready — tap the map to move.';
   let placeName = '';
   const map = createMap();
-  const movement = createMovement(map.spawn);
+  const controller = createGameController(map);
+  const movement = controller.movement;
   onMount(() => {
     const app = new Application();
     let initialized = false;
@@ -201,22 +200,22 @@
         };
         app.ticker.add((ticker) => {
           const delta = Math.min(ticker.deltaMS / 1000, 0.1);
-          advanceMovement(movement, delta);
+          controller.tick(delta);
           updateLocation();
           draw(delta);
         });
         draw();
         canvas.addEventListener('pointerdown', (event) => {
-          if (event.pointerType === 'mouse' && event.button !== 0) return;
           const rect = canvas.getBoundingClientRect();
-          const requested: Point = {
-            col: Math.floor((event.clientX - rect.left - camera.x) / TILE_SIZE),
-            row: Math.floor((event.clientY - rect.top - camera.y) / TILE_SIZE)
-          };
-          const destination = resolveDestination(map, movement.tile, requested);
+          const destination = controller.pointerDown({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            pointerType: event.pointerType,
+            button: event.button,
+            rect,
+            camera
+          });
           if (!destination) return;
-          movement.route = findPath(map, movement.tile, destination) ?? [];
-          movement.destination = destination;
           status = `Moving to column ${destination.col + 1}, row ${destination.row + 1}.`;
         });
       })

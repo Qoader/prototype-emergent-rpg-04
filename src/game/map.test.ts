@@ -61,6 +61,27 @@ describe('heroic fantasy world generation', () => {
     expect([...map.chunkCache?.keys() ?? []]).toEqual(['0,0']);
   });
 
+  it('returns undefined outside the world and reuses generated chunk tiles', () => {
+    const map = createMap(424242);
+    expect(tileAt(map, { col: -1, row: 0 })).toBeUndefined();
+    expect(tileAt(map, { col: map.width, row: 0 })).toBeUndefined();
+    const first = tileAt(map, { col: 1000, row: 1000 });
+    expect(first).toBeDefined();
+    expect(tileAt(map, { col: 1000, row: 1000 })).toBe(first);
+    expect(map.chunkCache?.get('62,62')?.size).toBe(1);
+  });
+
+  it('prefers authored overlays over generated terrain and clamps viewport chunks', () => {
+    const map = createMap();
+    const overlay = [...(map.overlays?.values() ?? [])][0]!;
+    expect(tileAt(map, { col: overlay.col, row: overlay.row })).toEqual(overlay);
+    const range = chunkRangeForViewport(map, { x: 0, y: 0 }, { width: 1, height: 1 });
+    expect(range.left).toBe(0);
+    expect(range.top).toBe(0);
+    expect(range.right).toBe(1);
+    expect(range.bottom).toBe(1);
+  });
+
   it('is deterministic and creates five complete realms', () => {
     const first = createMap();
     const second = createMap();

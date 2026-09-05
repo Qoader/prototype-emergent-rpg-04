@@ -16,6 +16,7 @@ jobs:
       - run: pnpm check
       - run: pnpm lint
       - run: pnpm test:unit
+      - run: pnpm test:integration
       - run: pnpm build
       - uses: peaceiris/actions-gh-pages@v4
         with:
