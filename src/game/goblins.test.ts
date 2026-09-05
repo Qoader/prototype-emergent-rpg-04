@@ -33,4 +33,16 @@ describe('goblin simulation', () => {
     for (let i = 0; i < 100; i += 1) simulation.tick(1 / 60, []);
     expect(simulation.snapshots().some((goblin) => goblin.tile.col === nest.col && goblin.tile.row === nest.row)).toBe(true);
   });
+
+  it('does not replan an unchanged pursuit route on every perception interval', () => {
+    let reads = 0;
+    const reader = map();
+    const counted = { ...reader, getTile: (point: { col: number; row: number }) => { reads += 1; return reader.getTile(point); } };
+    const simulation = createGoblinSimulation({ seed: 3, nests: [nest], tiles: counted });
+    const target = { id: 'player', kind: 'player' as const, tile: { col: 4, row: 2 } };
+    simulation.tick(0.2, [target]);
+    const afterInitialPlan = reads;
+    simulation.tick(1, [target]);
+    expect(reads - afterInitialPlan).toBeLessThan(120);
+  });
 });

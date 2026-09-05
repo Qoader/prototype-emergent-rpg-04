@@ -7,10 +7,22 @@ const directions = [-1, 0, 1]
   .filter((step) => step.col || step.row);
 const key = (point: Point) => `${point.col},${point.row}`;
 const distance = (a: Point, b: Point) => Math.hypot(a.col - b.col, a.row - b.row);
-const readerFor = (map: WorldMap | TileReader): TileReader =>
-  'getTile' in map
+const readerFor = (map: WorldMap | TileReader): TileReader => {
+  const source: TileReader = 'getTile' in map
     ? map
     : { width: map.width, height: map.height, getTile: (point) => tileAt(map, point) };
+  // A search visits the same cells repeatedly (especially when checking
+  // diagonal corner cutting). Keep this cache local to the search so it has
+  // no invalidation or world lifetime concerns.
+  const cache = new Map<string, ReturnType<TileReader['getTile']>>();
+  return { width: source.width, height: source.height, getTile: (point) => {
+    const id = key(point);
+    if (cache.has(id)) return cache.get(id);
+    const tile = source.getTile(point);
+    cache.set(id, tile);
+    return tile;
+  }};
+};
 function inBounds(point: Point, bounds?: SearchBounds) {
   return (
     !bounds ||
@@ -121,9 +133,10 @@ export function findPath(
       const route: Point[] = [];
       let cursor = current;
       while (key(cursor) !== key(start)) {
-        route.unshift(cursor);
+        route.push(cursor);
         cursor = came.get(key(cursor))!;
       }
+      route.reverse();
       return route;
     }
     for (const next of neighbors(reader, current, bounds)) {
