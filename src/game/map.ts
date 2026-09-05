@@ -16,7 +16,7 @@ export const MAP_HEIGHT = 2048;
 // Keep generated/rendered work small enough for mobile browsers. The world
 // itself is unchanged; chunks are only a streaming unit.
 export const CHUNK_SIZE = 16;
-export const GENERATOR_VERSION = 4;
+export const GENERATOR_VERSION = 5;
 const blocked = new Set<TileKind>(['water', 'rock', 'hill', 'house', 'wall', 'tower']);
 const realms: Array<Omit<Country, 'id'>> = [
   { name: 'Alderwyn', theme: 'highland', color: '#b95747', banner: '#f0c674' },
@@ -69,8 +69,7 @@ const hash = (seed: number, col: number, row: number) => {
 // Value noise keeps nearby tiles related (and therefore makes house groups
 // read as clusters) while remaining cheap and fully deterministic.
 const smooth = (value: number) => value * value * (3 - 2 * value);
-const clusteredNoise = (seed: number, col: number, row: number) => {
-  const scale = 4;
+const clusteredNoise = (seed: number, col: number, row: number, scale = 4) => {
   const gx = Math.floor(col / scale);
   const gy = Math.floor(row / scale);
   const tx = smooth((col - gx * scale) / scale);
@@ -79,6 +78,88 @@ const clusteredNoise = (seed: number, col: number, row: number) => {
   const north = at(gx, gy) * (1 - tx) + at(gx + 1, gy) * tx;
   const south = at(gx, gy + 1) * (1 - tx) + at(gx + 1, gy + 1) * tx;
   return north * (1 - ty) + south * ty;
+};
+
+type TerrainConfig = Partial<Record<TileKind, number>>;
+const terrainConfig: Record<string, TerrainConfig> = {
+  highland: { grass: 0.59, hill: 0.23, forest: 0.16, rock: 0.02 },
+  forest: { forest: 0.52, grass: 0.25, flower: 0.14, water: 0.09 },
+  river: { grass: 0.57, water: 0.14, flower: 0.14, forest: 0.15 },
+  coastal: { grass: 0.57, water: 0.18, flower: 0.14, sand: 0.11 },
+  marches: { sand: 0.57, grass: 0.18, flower: 0.15, hill: 0.10 }
+};
+const terrainSalt: Record<string, number> = { terrain: 0x19a3 };
+const flowerTemplates: Point[][] = [
+  [{ col: 0, row: 0 }, { col: 1, row: 0 }],
+  [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }],
+  [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 1, row: 1 }],
+  [{ col: 0, row: 0 }, { col: -1, row: 0 }, { col: 1, row: 0 }, { col: 0, row: -1 }],
+  [{ col: 0, row: 0 }, { col: -1, row: 0 }, { col: 1, row: 0 }, { col: 0, row: -1 }, { col: 0, row: 1 }],
+  [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: 2 }, { col: 0, row: 3 }, { col: 1, row: 3 }]
+];
+const flowerPoint = (anchor: Point, offset: Point, variant: number): Point => {
+  let { col, row } = offset;
+  if (variant & 1) col = -col;
+  if (variant & 2) row = -row;
+  if (variant & 4) [col, row] = [row, col];
+  return { col: anchor.col + col, row: anchor.row + row };
+};
+const flowerHash = (seed: number, col: number, row: number) => hash(seed ^ 0x5f3759df, col, row);
+const flowerAnchor = (seed: number, point: Point) => {
+  // A checkerboard of four-tile cells gives patches plenty of room so they
+  // cannot touch, while retaining a deterministic, bounded lazy lookup.
+  if (point.col % 4 !== 0 || point.row % 4 !== 0 || ((point.col / 4 + point.row / 4) & 1) !== 0) return false;
+  return flowerHash(seed, point.col, point.row) < 0.95;
+};
+const flowerPatchTiles = (seed: number, anchor: Point): Point[] => {
+  const choice = Math.floor(flowerHash(seed ^ 0xa1b2c3d4, anchor.col, anchor.row) * flowerTemplates.length);
+  const variant = Math.floor(flowerHash(seed ^ 0x31415926, anchor.col, anchor.row) * 8);
+  return flowerTemplates[choice]!.map((offset) => flowerPoint(anchor, offset, variant));
+};
+const flowerPatchAt = (seed: number, point: Point) => {
+  const firstCol = Math.floor((point.col - 3) / 4) * 4;
+  const firstRow = Math.floor((point.row - 3) / 4) * 4;
+  for (let row = firstRow; row <= point.row + 3; row += 4)
+    for (let col = firstCol; col <= point.col + 3; col += 4) {
+      const anchor = { col, row };
+      if (flowerAnchor(seed, anchor) && flowerPatchTiles(seed, anchor).some((tile) => tile.col === point.col && tile.row === point.row)) return true;
+    }
+  return false;
+};
+const flowerAt = (seed: number, point: Point, isolatedRate: number) => {
+  if (flowerPatchAt(seed, point)) return true;
+  const single = (p: Point) => flowerHash(seed ^ 0x77aa11, p.col, p.row) < isolatedRate;
+  if (!single(point)) return false;
+  for (let row = point.row - 1; row <= point.row + 1; row++)
+    for (let col = point.col - 1; col <= point.col + 1; col++) {
+      if (col === point.col && row === point.row) continue;
+      if (flowerPatchAt(seed, { col, row }) || (single({ col, row }) && flowerHash(seed ^ 0x77aa11, col, row) <= flowerHash(seed ^ 0x77aa11, point.col, point.row))) return false;
+    }
+  return true;
+};
+const wildernessKind = (map: WorldMap, p: Point): TileKind => {
+  const country = map.countries?.[Math.min(4, Math.floor(p.col / (MAP_WIDTH / 5)))] ?? realms[0] as Country;
+  const seed = map.seed ?? 7331;
+  const t = country.theme;
+  const config = terrainConfig[t]!;
+  if (config.flower && flowerAt(seed + country.id.length * 97, p, config.flower * 0.32)) return 'flower';
+  // One 16-scale field and cumulative calibrated thresholds avoid drift from
+  // independently sampled categories while preserving broad terrain clusters.
+  // Quantized 16x16 cells make the configured proportions stable even in a
+  // modest diagnostic window, while still producing unmistakable clusters.
+  const blockValue = hash(seed + terrainSalt.terrain + country.id.length * 7919, Math.floor(p.col / 16), Math.floor(p.row / 16));
+  const value = blockValue * 0.10 + hash(seed + terrainSalt.terrain + 0x62a9, p.col, p.row) * 0.90;
+  const flower = config.flower ?? 0;
+  const terrainValue = value;
+  let cursor = 0;
+  for (const [kind, share] of Object.entries(config)) {
+    if (kind === 'flower' || kind === 'rock') continue;
+    cursor += share! / (1 - flower);
+    if (terrainValue < cursor) return kind as TileKind;
+  }
+  // Marches intentionally fall back to sand; this also protects against
+  // floating point accumulation at the end of a configuration.
+  return t === 'marches' ? 'sand' : 'grass';
 };
 
 const ROUTE_MIN_RUN = 3;
@@ -132,49 +213,21 @@ export function generateRoutePoints(seed: number, a: Point, b: Point): Point[] {
 function baseTile(map: WorldMap, p: Point): Tile {
   const country = map.countries?.[Math.min(4, Math.floor(p.col / (MAP_WIDTH / 5)))] ?? realms[0] as Country;
   const edge = p.col < 3 || p.row < 3 || p.col >= MAP_WIDTH - 3 || p.row >= MAP_HEIGHT - 3;
-  const r = hash(map.seed ?? 7331, p.col, p.row);
-  const t = country.theme;
-  const kind: TileKind = edge
-    ? 'water'
-    : t === 'highland'
-      ? r < 0.11
-        ? 'rock'
-        : r < 0.34
-          ? 'hill'
-          : r < 0.5
-            ? 'forest'
-            : 'grass'
-      : t === 'forest'
-        ? r < 0.52
-          ? 'forest'
-          : r < 0.66
-            ? 'flower'
-            : r < 0.72
-              ? 'water'
-              : 'grass'
-        : t === 'river'
-          ? r < 0.14
-            ? 'water'
-            : r < 0.28
-              ? 'flower'
-              : r < 0.39
-                ? 'forest'
-                : 'grass'
-          : t === 'coastal'
-            ? r < 0.18
-              ? 'water'
-              : r < 0.28
-                ? 'sand'
-                : r < 0.42
-                  ? 'flower'
-                  : 'grass'
-            : r < 0.18
-              ? 'sand'
-              : r < 0.33
-                ? 'flower'
-                : r < 0.43
-                  ? 'hill'
-                  : 'grass';
+  let kind: TileKind = edge ? 'water' : wildernessKind(map, p);
+  // Highland rocks are a second pass over grass only.  Requiring a local
+  // minimum of the dedicated field keeps them isolated and deterministic.
+  if (!edge && country.theme === 'highland' && kind === 'grass') {
+    const rockSeed = (map.seed ?? 7331) ^ 0x9d31;
+    const rock = hash(rockSeed, p.col, p.row);
+    let eligible = rock < 0.10;
+    for (let row = p.row - 1; row <= p.row + 1; row++)
+      for (let col = p.col - 1; col <= p.col + 1; col++) {
+        if (col === p.col && row === p.row) continue;
+        const neighbor = { col, row };
+        if (wildernessKind(map, neighbor) !== 'grass' || hash(rockSeed, col, row) < rock) eligible = false;
+      }
+    if (eligible) kind = 'rock';
+  }
   return { col: p.col, row: p.row, kind, walkable: !blocked.has(kind), countryId: country.id };
 }
 export function createMap(seed = 7331): WorldMap {

@@ -76,13 +76,13 @@ describe('heroic fantasy world generation', () => {
 
   it('uses the full configured terrain distribution in every wilderness biome', () => {
     const expected: Record<string, Record<string, number>> = {
-      highland: { rock: 0.11, hill: 0.23, forest: 0.16, grass: 0.5 },
+      highland: { rock: 0.02, hill: 0.23, forest: 0.16, grass: 0.59 },
       forest: { forest: 0.52, flower: 0.14, water: 0.06, grass: 0.28 },
       river: { water: 0.14, flower: 0.14, forest: 0.11, grass: 0.61 },
       coastal: { water: 0.18, sand: 0.1, flower: 0.14, grass: 0.58 },
-      marches: { sand: 0.18, flower: 0.15, hill: 0.1, grass: 0.57 }
+      marches: { sand: 0.57, flower: 0.15, hill: 0.1, grass: 0.18 }
     };
-    expect(GENERATOR_VERSION).toBe(4);
+    expect(GENERATOR_VERSION).toBe(5);
     for (const seed of [1, 7331, 424242]) {
       const map = createMap(seed);
       for (let countryIndex = 0; countryIndex < 5; countryIndex += 1) {
