@@ -80,86 +80,95 @@ const clusteredNoise = (seed: number, col: number, row: number, scale = 4) => {
   return north * (1 - ty) + south * ty;
 };
 
-type TerrainConfig = Partial<Record<TileKind, number>>;
-const terrainConfig: Record<string, TerrainConfig> = {
-  highland: { grass: 0.59, hill: 0.23, forest: 0.16, rock: 0.02 },
-  forest: { forest: 0.52, grass: 0.25, flower: 0.14, water: 0.09 },
-  river: { grass: 0.57, water: 0.14, flower: 0.14, forest: 0.15 },
-  coastal: { grass: 0.57, water: 0.18, flower: 0.14, sand: 0.11 },
-  marches: { sand: 0.57, grass: 0.18, flower: 0.15, hill: 0.10 }
+type TerrainConfig = {
+  flowerRate?: number;
+  shares: Partial<Record<TileKind, number>>;
+  fallback: TileKind;
 };
-const terrainSalt: Record<string, number> = { terrain: 0x19a3 };
+const terrainConfig: Record<string, TerrainConfig> = {
+  highland: { shares: { forest: 0.16, hill: 0.23, grass: 0.61 }, fallback: 'grass' },
+  forest: { flowerRate: 0.14, shares: { forest: 0.60465, water: 0.06977, grass: 0.32558 }, fallback: 'grass' },
+  river: { flowerRate: 0.14, shares: { water: 0.16279, forest: 0.12791, grass: 0.7093 }, fallback: 'grass' },
+  coastal: { flowerRate: 0.14, shares: { water: 0.2093, sand: 0.11628, grass: 0.67442 }, fallback: 'grass' },
+  marches: { flowerRate: 0.15, shares: { hill: 0.11765, grass: 0.21176, sand: 0.67059 }, fallback: 'sand' }
+};
+const REGION_SCALE = 16;
+const REGION_JITTER = 5;
+const terrainSalt = 0x19a3;
 const flowerTemplates: Point[][] = [
   [{ col: 0, row: 0 }, { col: 1, row: 0 }],
   [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }],
   [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 1, row: 1 }],
   [{ col: 0, row: 0 }, { col: -1, row: 0 }, { col: 1, row: 0 }, { col: 0, row: -1 }],
   [{ col: 0, row: 0 }, { col: -1, row: 0 }, { col: 1, row: 0 }, { col: 0, row: -1 }, { col: 0, row: 1 }],
-  [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: 2 }, { col: 0, row: 3 }, { col: 1, row: 3 }]
+  [{ col: 0, row: 0 }, { col: 1, row: 0 }, { col: 0, row: 1 }, { col: 1, row: 1 }, { col: 0, row: 2 }, { col: 1, row: 2 }]
 ];
-const flowerPoint = (anchor: Point, offset: Point, variant: number): Point => {
+const transformedFlowerPoint = (offset: Point, variant: number): Point => {
   let { col, row } = offset;
   if (variant & 1) col = -col;
   if (variant & 2) row = -row;
   if (variant & 4) [col, row] = [row, col];
-  return { col: anchor.col + col, row: anchor.row + row };
+  return { col, row };
 };
 const flowerHash = (seed: number, col: number, row: number) => hash(seed ^ 0x5f3759df, col, row);
-const flowerAnchor = (seed: number, point: Point) => {
-  // A checkerboard of four-tile cells gives patches plenty of room so they
-  // cannot touch, while retaining a deterministic, bounded lazy lookup.
-  if (point.col % 4 !== 0 || point.row % 4 !== 0 || ((point.col / 4 + point.row / 4) & 1) !== 0) return false;
-  return flowerHash(seed, point.col, point.row) < 0.95;
+const FLOWER_CELL_SIZE = 5;
+const flowerCellAnchor = (cellCol: number, cellRow: number) => ({ col: cellCol * FLOWER_CELL_SIZE + 1, row: cellRow * FLOWER_CELL_SIZE + 1 });
+const flowerPatchTiles = (seed: number, cellCol: number, cellRow: number): Point[] => {
+  const anchor = flowerCellAnchor(cellCol, cellRow);
+  const choice = Math.floor(flowerHash(seed ^ 0xa1b2c3d4, cellCol, cellRow) * flowerTemplates.length);
+  const variant = Math.floor(flowerHash(seed ^ 0x31415926, cellCol, cellRow) * 8);
+  const shape = flowerTemplates[choice]!.map((offset) => transformedFlowerPoint(offset, variant));
+  const left = Math.min(...shape.map((point) => point.col));
+  const top = Math.min(...shape.map((point) => point.row));
+  return shape.map((point) => ({ col: anchor.col + point.col - left, row: anchor.row + point.row - top }));
 };
-const flowerPatchTiles = (seed: number, anchor: Point): Point[] => {
-  const choice = Math.floor(flowerHash(seed ^ 0xa1b2c3d4, anchor.col, anchor.row) * flowerTemplates.length);
-  const variant = Math.floor(flowerHash(seed ^ 0x31415926, anchor.col, anchor.row) * 8);
-  return flowerTemplates[choice]!.map((offset) => flowerPoint(anchor, offset, variant));
+const flowerPatchAt = (seed: number, point: Point, activation = 0.65625) => {
+  const cellCol = Math.floor(point.col / FLOWER_CELL_SIZE);
+  const cellRow = Math.floor(point.row / FLOWER_CELL_SIZE);
+  if (flowerHash(seed ^ 0x8badf00d, cellCol, cellRow) >= activation) return false;
+  return flowerPatchTiles(seed, cellCol, cellRow).some((tile) => tile.col === point.col && tile.row === point.row);
 };
-const flowerPatchAt = (seed: number, point: Point) => {
-  const firstCol = Math.floor((point.col - 3) / 4) * 4;
-  const firstRow = Math.floor((point.row - 3) / 4) * 4;
-  for (let row = firstRow; row <= point.row + 3; row += 4)
-    for (let col = firstCol; col <= point.col + 3; col += 4) {
-      const anchor = { col, row };
-      if (flowerAnchor(seed, anchor) && flowerPatchTiles(seed, anchor).some((tile) => tile.col === point.col && tile.row === point.row)) return true;
-    }
-  return false;
-};
-const flowerAt = (seed: number, point: Point, isolatedRate: number) => {
-  if (flowerPatchAt(seed, point)) return true;
+const flowerAt = (seed: number, point: Point, isolatedRate: number, patchActivation: number) => {
+  if (flowerPatchAt(seed, point, patchActivation)) return true;
   const single = (p: Point) => flowerHash(seed ^ 0x77aa11, p.col, p.row) < isolatedRate;
   if (!single(point)) return false;
   for (let row = point.row - 1; row <= point.row + 1; row++)
     for (let col = point.col - 1; col <= point.col + 1; col++) {
       if (col === point.col && row === point.row) continue;
-      if (flowerPatchAt(seed, { col, row }) || (single({ col, row }) && flowerHash(seed ^ 0x77aa11, col, row) <= flowerHash(seed ^ 0x77aa11, point.col, point.row))) return false;
+      if (flowerPatchAt(seed, { col, row }, patchActivation) || (single({ col, row }) && flowerHash(seed ^ 0x77aa11, col, row) <= flowerHash(seed ^ 0x77aa11, point.col, point.row))) return false;
     }
   return true;
+};
+const regionSeed = (seed: number, cellCol: number, cellRow: number) => ({
+  col: cellCol * REGION_SCALE + Math.floor(hash(seed ^ 0x2c1b3c6d, cellCol, cellRow) * 11) - REGION_JITTER,
+  row: cellRow * REGION_SCALE + Math.floor(hash(seed ^ 0x7f4a7c15, cellCol, cellRow) * 11) - REGION_JITTER
+});
+const regionFor = (seed: number, point: Point) => {
+  const cellCol = Math.floor(point.col / REGION_SCALE);
+  const cellRow = Math.floor(point.row / REGION_SCALE);
+  let best = { cellCol, cellRow, distance: Number.POSITIVE_INFINITY };
+  for (let row = cellRow - 1; row <= cellRow + 1; row++) for (let col = cellCol - 1; col <= cellCol + 1; col++) {
+    const candidate = regionSeed(seed, col, row);
+    const distance = (candidate.col - point.col) ** 2 + (candidate.row - point.row) ** 2;
+    if (distance < best.distance || (distance === best.distance && (row < best.cellRow || (row === best.cellRow && col < best.cellCol))))
+      best = { cellCol: col, cellRow: row, distance };
+  }
+  return best;
 };
 const wildernessKind = (map: WorldMap, p: Point): TileKind => {
   const country = map.countries?.[Math.min(4, Math.floor(p.col / (MAP_WIDTH / 5)))] ?? realms[0] as Country;
   const seed = map.seed ?? 7331;
   const t = country.theme;
   const config = terrainConfig[t]!;
-  if (config.flower && flowerAt(seed + country.id.length * 97, p, config.flower * 0.32)) return 'flower';
-  // One 16-scale field and cumulative calibrated thresholds avoid drift from
-  // independently sampled categories while preserving broad terrain clusters.
-  // Quantized 16x16 cells make the configured proportions stable even in a
-  // modest diagnostic window, while still producing unmistakable clusters.
-  const blockValue = hash(seed + terrainSalt.terrain + country.id.length * 7919, Math.floor(p.col / 16), Math.floor(p.row / 16));
-  const value = blockValue * 0.10 + hash(seed + terrainSalt.terrain + 0x62a9, p.col, p.row) * 0.90;
-  const flower = config.flower ?? 0;
-  const terrainValue = value;
+  if (config.flowerRate && flowerAt(seed + country.id.length * 97, p, t === 'marches' ? 0.067 : 0.061, t === 'marches' ? 0.703125 : 0.65625)) return 'flower';
+  const region = regionFor(seed + terrainSalt + country.id.length * 7919, p);
+  const terrainValue = hash(seed + terrainSalt, region.cellCol, region.cellRow);
   let cursor = 0;
-  for (const [kind, share] of Object.entries(config)) {
-    if (kind === 'flower' || kind === 'rock') continue;
-    cursor += share! / (1 - flower);
+  for (const [kind, share] of Object.entries(config.shares)) {
+    cursor += share;
     if (terrainValue < cursor) return kind as TileKind;
   }
-  // Marches intentionally fall back to sand; this also protects against
-  // floating point accumulation at the end of a configuration.
-  return t === 'marches' ? 'sand' : 'grass';
+  return config.fallback;
 };
 
 const ROUTE_MIN_RUN = 3;
@@ -219,7 +228,7 @@ function baseTile(map: WorldMap, p: Point): Tile {
   if (!edge && country.theme === 'highland' && kind === 'grass') {
     const rockSeed = (map.seed ?? 7331) ^ 0x9d31;
     const rock = hash(rockSeed, p.col, p.row);
-    let eligible = rock < 0.10;
+    let eligible = rock < 0.045;
     for (let row = p.row - 1; row <= p.row + 1; row++)
       for (let col = p.col - 1; col <= p.col + 1; col++) {
         if (col === p.col && row === p.row) continue;

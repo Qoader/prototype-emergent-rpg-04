@@ -90,28 +90,103 @@ describe('heroic fantasy world generation', () => {
         const counts = new Map<string, number>();
         let total = 0;
         const left = Math.floor(countryIndex * map.width / 5) + 75;
-        const right = left + 255;
-        for (let row = 100; row < 356; row += 1) {
-          for (let col = left; col <= right; col += 1) {
-            const point = { col, row };
-            // Authored settlement/road tiles are overlays, not wilderness.
-            if (map.overlays?.has(`${col},${row}`)) continue;
-            const kind = tileAt(map, point)?.kind;
-            if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
-            total += 1;
+        for (const top of [100, 700, 1300]) {
+          for (let row = top; row < top + 256; row += 1) {
+            for (let col = left; col <= left + 255; col += 1) {
+              const point = { col, row };
+              // Authored settlement/road tiles are overlays, not wilderness.
+              if (map.overlays?.has(`${col},${row}`)) continue;
+              const kind = tileAt(map, point)?.kind;
+              if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+              total += 1;
+            }
           }
         }
         expect(total).toBeGreaterThan(60000);
         for (const [kind, target] of Object.entries(expected[country.theme]!)) {
           const actual = (counts.get(kind) ?? 0) / total;
-          expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
-          expect(actual).toBeGreaterThanOrEqual(target - 0.03);
-          expect(actual).toBeLessThanOrEqual(target + 0.03);
+          expect(actual, `${seed} ${country.theme} ${kind}: expected ${target}, actual ${actual}`).toBeGreaterThanOrEqual(target - 0.03);
+          expect(actual, `${seed} ${country.theme} ${kind}: expected ${target}, actual ${actual}`).toBeLessThanOrEqual(target + 0.03);
         }
         expect([...counts.keys()].sort()).toEqual(Object.keys(expected[country.theme]!).sort());
       }
     }
-  });
+  }, 120000);
+
+  it('keeps regional terrain clustered and flower patches bounded', () => {
+    const cardinal = [{ col: 1, row: 0 }, { col: -1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: -1 }];
+    for (const seed of [7331]) {
+      const map = createMap(seed);
+      for (let countryIndex = 0; countryIndex < 5; countryIndex += 1) {
+        const country = map.countries![countryIndex]!;
+        const left = Math.floor(countryIndex * map.width / 5) + 75;
+        const top = 100;
+        const kinds = new Map<string, number>();
+        const same = new Map<string, number>();
+        const flowers = new Set<string>();
+        for (let row = top + 1; row < top + 255; row += 1) for (let col = left + 1; col < left + 255; col += 1) {
+          if (map.overlays?.has(`${col},${row}`)) continue;
+          const kind = tileAt(map, { col, row })?.kind;
+          if (!kind) continue;
+          kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+          if (kind === 'flower') flowers.add(`${col},${row}`);
+          const neighbors = cardinal.map((delta) => tileAt(map, { col: col + delta.col, row: row + delta.row })?.kind);
+          if (neighbors.some((neighbor) => neighbor === kind)) same.set(kind, (same.get(kind) ?? 0) + 1);
+        }
+        for (const [kind, count] of kinds) {
+          if (kind === 'flower' || kind === 'rock') continue;
+          expect((same.get(kind) ?? 0) / count, `${seed} ${country.theme} ${kind} adjacency`).toBeGreaterThan(count / [...kinds.values()].reduce((a, b) => a + b, 0));
+        }
+        if (!['forest', 'river', 'coastal', 'marches'].includes(country.theme)) continue;
+        const visited = new Set<string>();
+        const components: number[] = [];
+        for (const id of flowers) {
+          if (visited.has(id)) continue;
+          const queue = [id]; visited.add(id); let size = 0; let touchesBoundary = false;
+          while (queue.length) {
+            const current = queue.pop()!; size += 1;
+            const [col, row] = current.split(',').map(Number);
+            if (col === left + 1 || col === left + 254 || row === top + 1 || row === top + 254) touchesBoundary = true;
+            for (const delta of [...cardinal, { col: 1, row: 1 }, { col: 1, row: -1 }, { col: -1, row: 1 }, { col: -1, row: -1 }]) {
+              const neighbor = `${col + delta.col},${row + delta.row}`;
+              if (flowers.has(neighbor) && !visited.has(neighbor)) { visited.add(neighbor); queue.push(neighbor); }
+            }
+          }
+          if (!touchesBoundary) components.push(size);
+        }
+        const completeFlowerCount = components.reduce((sum, size) => sum + size, 0);
+        const isolated = components.filter((size) => size === 1).length;
+        const clustered = components.filter((size) => size >= 2 && size <= 6).reduce((sum, size) => sum + size, 0);
+        expect(clustered / completeFlowerCount, `${seed} ${country.theme} clustered flowers`).toBeGreaterThanOrEqual(0.7);
+        expect(clustered / completeFlowerCount, `${seed} ${country.theme} clustered flowers`).toBeLessThanOrEqual(0.8);
+        expect(isolated / completeFlowerCount, `${seed} ${country.theme} isolated flowers`).toBeGreaterThanOrEqual(0.2);
+        expect(isolated / completeFlowerCount, `${seed} ${country.theme} isolated flowers`).toBeLessThanOrEqual(0.3);
+        expect(Math.max(...components)).toBeLessThanOrEqual(6);
+      }
+    }
+  }, 120000);
+
+  it('keeps Highland rocks isolated on grass', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      const left = 75;
+      let total = 0;
+      let rocks = 0;
+      for (let row = 100; row < 228; row += 1) for (let col = left; col <= left + 127; col += 1) {
+        if (map.overlays?.has(`${col},${row}`)) continue;
+        total += 1;
+        const tile = tileAt(map, { col, row })!;
+        if (tile.kind !== 'rock') continue;
+        rocks += 1;
+        for (let dr = -1; dr <= 1; dr += 1) for (let dc = -1; dc <= 1; dc += 1) {
+          if (!dc && !dr) continue;
+          expect(tileAt(map, { col: col + dc, row: row + dr })?.kind).toBe('grass');
+        }
+      }
+      expect(rocks / total).toBeGreaterThan(0.01);
+      expect(rocks / total).toBeLessThan(0.03);
+    }
+  }, 120000);
 
   it('regenerates evicted chunks deterministically and keeps world edges water', () => {
     const map = createMap(424242);
