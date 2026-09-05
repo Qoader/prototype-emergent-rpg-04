@@ -7,7 +7,7 @@ import { cameraForPlayer } from './camera';
 import { locationAt } from './location';
 import { createChunkResourceRegistry } from './chunkResources';
 import { acceptsPointer, tilePointFromPointer } from './input';
-import { createPlayerSprite, type PlayerAnimation } from './playerSprite';
+import { createAdventurerSprite, createPlayerSprite, type PlayerAnimation } from './playerSprite';
 import {
   drawTileGround,
   drawTileOverhang,
@@ -44,6 +44,7 @@ export function createGameRuntime({
   const depthLayer = new Container();
   depthLayer.sortableChildren = true;
   const player = createPlayerSprite();
+  const adventurerViews = new Map<string, { sprite: ReturnType<typeof createAdventurerSprite>; time: number; state: string }>();
   let camera = { x: 0, y: 0 };
   let canvas: HTMLCanvasElement;
   let locationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -161,6 +162,11 @@ export function createGameRuntime({
           }
       };
       depthLayer.addChild(player.view);
+      for (const snapshot of controller.adventurers.snapshots()) {
+        const sprite = createAdventurerSprite();
+        depthLayer.addChild(sprite.view);
+        adventurerViews.set(snapshot.id, { sprite, time: 0, state: '' });
+      }
       world.addChild(groundLayer, marker, depthLayer);
       const updateCamera = () => {
         camera = cameraForPlayer(
@@ -195,6 +201,18 @@ export function createGameRuntime({
         player.setFrame(animation, movement.facing, frameIndex);
         player.view.position.set(movement.position.x * TILE_SIZE, movement.position.y * TILE_SIZE);
         player.view.zIndex = movement.position.y * TILE_SIZE;
+        for (const npc of controller.adventurers.snapshots()) {
+          const resource = adventurerViews.get(npc.id);
+          if (!resource) continue;
+          const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
+          resource.time = resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0;
+          resource.state = state;
+          const npcAnimation: PlayerAnimation = npc.walking ? 'walk' : 'idle';
+          const frameIndex = Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
+          resource.sprite.setFrame(npcAnimation, npc.facing, frameIndex);
+          resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
+          resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
+        }
         marker.clear();
         if (movement.destination)
           marker.circle(0, 0, 8).stroke({ color: '#fff3b0', width: 2, alpha: 0.9 });
@@ -216,11 +234,16 @@ export function createGameRuntime({
         }, 2600);
       };
       const tick = (ticker: { deltaMS: number }) => {
+        if (document.hidden) return;
+        if (wasHidden) { wasHidden = false; return; }
         const delta = Math.min(ticker.deltaMS / 1000, 0.1);
         controller.tick(delta);
         updateLocation();
         draw(delta);
       };
+      let wasHidden = false;
+      const visibility = () => { if (document.hidden) wasHidden = true; };
+      document.addEventListener('visibilitychange', visibility);
       app.ticker.add(tick);
       draw();
       const pointerDown = (event: globalThis.PointerEvent) => {
@@ -240,6 +263,7 @@ export function createGameRuntime({
         if (disposed) return;
         disposed = true;
         app.ticker.remove(tick);
+        document.removeEventListener('visibilitychange', visibility);
         canvas.removeEventListener('pointerdown', pointerDown);
         if (locationTimer) clearTimeout(locationTimer);
         chunkResources.destroyAll();

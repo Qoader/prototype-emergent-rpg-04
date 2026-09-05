@@ -2,6 +2,8 @@ import { planNavigation } from './pathfinding';
 import { advanceMovement, createMovement } from './movement';
 import type { Point, TileReader, WorldMap } from './types';
 import { acceptsPointer, tilePointFromPointer } from './input';
+import { createAdventurerSimulation } from './adventurers';
+import { tileAt } from './map';
 
 export type PointerInput = {
   clientX: number;
@@ -15,6 +17,8 @@ export type PointerInput = {
 /** Gameplay state boundary used by the renderer and by integration tests. */
 export function createGameController(map: WorldMap, tiles?: TileReader) {
   const movement = createMovement(map.spawn);
+  const reader = tiles ?? { width: map.width, height: map.height, getTile: (point: Point) => tileAt(map, point) };
+  const adventurers = createAdventurerSimulation(map, reader);
 
   const requestDestination = (requested: Point) => {
     const plan = planNavigation(tiles ?? map, movement.tile, requested);
@@ -29,9 +33,9 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     return requestDestination(tilePointFromPointer(input));
   };
 
-  const tick = (deltaSeconds: number) => advanceMovement(movement, deltaSeconds);
+  const tick = (deltaSeconds: number) => { advanceMovement(movement, deltaSeconds); adventurers.tick(deltaSeconds); };
 
-  return { movement, pointerDown, requestDestination, tick };
+  return { movement, pointerDown, requestDestination, tick, adventurers };
 }
 
 export type GameController = ReturnType<typeof createGameController>;
