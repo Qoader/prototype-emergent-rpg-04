@@ -4,6 +4,7 @@ import type { Point, TileReader, WorldMap } from './types';
 import { acceptsPointer, tilePointFromPointer } from './input';
 import { createAdventurerSimulation } from './adventurers';
 import { tileAt } from './map';
+import { createGoblinSimulation, type GoblinTarget } from './goblins';
 
 export type PointerInput = {
   clientX: number;
@@ -19,6 +20,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
   const movement = createMovement(map.spawn);
   const reader = tiles ?? { width: map.width, height: map.height, getTile: (point: Point) => tileAt(map, point) };
   const adventurers = createAdventurerSimulation(map, reader);
+  const goblins = createGoblinSimulation({ seed: map.seed, nests: map.goblinNests ?? [], tiles: reader, settlements: map.settlements });
 
   const requestDestination = (requested: Point) => {
     const plan = planNavigation(tiles ?? map, movement.tile, requested);
@@ -33,9 +35,14 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     return requestDestination(tilePointFromPointer(input));
   };
 
-  const tick = (deltaSeconds: number) => { advanceMovement(movement, deltaSeconds); adventurers.tick(deltaSeconds); };
+  const tick = (deltaSeconds: number) => {
+    advanceMovement(movement, deltaSeconds);
+    adventurers.tick(deltaSeconds);
+    const targets: GoblinTarget[] = [{ id: 'player', kind: 'player', tile: movement.tile, position: { ...movement.position } }, ...adventurers.snapshots().map((npc) => ({ id: npc.id, kind: 'adventurer' as const, tile: npc.tile, position: npc.position }))];
+    goblins.tick(deltaSeconds, targets);
+  };
 
-  return { movement, pointerDown, requestDestination, tick, adventurers };
+  return { movement, pointerDown, requestDestination, tick, adventurers, goblins };
 }
 
 export type GameController = ReturnType<typeof createGameController>;

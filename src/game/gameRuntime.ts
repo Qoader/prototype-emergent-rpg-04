@@ -7,7 +7,7 @@ import { cameraForPlayer } from './camera';
 import { locationAt } from './location';
 import { createChunkResourceRegistry } from './chunkResources';
 import { acceptsPointer, tilePointFromPointer } from './input';
-import { createAdventurerSprite, createPlayerSprite, type PlayerAnimation } from './playerSprite';
+import { createAdventurerSprite, createGoblinSprite, createPlayerSprite, type PlayerAnimation } from './playerSprite';
 import {
   drawTileGround,
   drawTileOverhang,
@@ -45,6 +45,7 @@ export function createGameRuntime({
   depthLayer.sortableChildren = true;
   const player = createPlayerSprite();
   const adventurerViews = new Map<string, { sprite: ReturnType<typeof createAdventurerSprite>; time: number; state: string }>();
+  const goblinViews = new Map<string, { sprite: ReturnType<typeof createGoblinSprite>; time: number; state: string }>();
   let camera = { x: 0, y: 0 };
   let canvas: HTMLCanvasElement;
   let locationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -132,6 +133,12 @@ export function createGameRuntime({
           depthLayer.addChild(landmark);
           depth.push(landmark);
         }
+        for (const nest of map.goblinNests ?? []) {
+          if (Math.floor(nest.col / CHUNK_SIZE) !== chunkCol || Math.floor(nest.row / CHUNK_SIZE) !== chunkRow) continue;
+          const x = nest.col * TILE_SIZE + 24; const y = nest.row * TILE_SIZE + 24;
+          const camp = new Graphics().ellipse(x, y + 8, 18, 7).fill({ color: '#3d2d24', alpha: 0.55 }).poly([x - 18, y + 7, x, y - 12, x + 18, y + 7]).fill('#79533b').poly([x - 14, y + 4, x, y - 7, x + 14, y + 4]).fill('#a6764e');
+          camp.zIndex = y; depthLayer.addChild(camp); depth.push(camp);
+        }
         chunkResources.set(id, { ground, depth });
       };
       let lastChunkWindow = '';
@@ -166,6 +173,11 @@ export function createGameRuntime({
         const sprite = createAdventurerSprite();
         depthLayer.addChild(sprite.view);
         adventurerViews.set(snapshot.id, { sprite, time: 0, state: '' });
+      }
+      for (const snapshot of controller.goblins.snapshots()) {
+        const sprite = createGoblinSprite();
+        depthLayer.addChild(sprite.view);
+        goblinViews.set(snapshot.id, { sprite, time: 0, state: '' });
       }
       world.addChild(groundLayer, marker, depthLayer);
       const updateCamera = () => {
@@ -212,6 +224,14 @@ export function createGameRuntime({
           resource.sprite.setFrame(npcAnimation, npc.facing, frameIndex);
           resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
           resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
+        }
+        for (const npc of controller.goblins.snapshots()) {
+          const resource = goblinViews.get(npc.id); if (!resource) continue;
+          const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
+          resource.time = resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0; resource.state = state;
+          const animation: PlayerAnimation = npc.walking ? 'walk' : 'idle';
+          const frameIndex = Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
+          resource.sprite.setFrame(animation, npc.facing, frameIndex); resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE); resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
         }
         marker.clear();
         if (movement.destination)
@@ -267,6 +287,8 @@ export function createGameRuntime({
         canvas.removeEventListener('pointerdown', pointerDown);
         if (locationTimer) clearTimeout(locationTimer);
         chunkResources.destroyAll();
+        for (const resource of [...adventurerViews.values(), ...goblinViews.values()]) resource.sprite.view.destroy({ children: true });
+        adventurerViews.clear(); goblinViews.clear();
         app.destroy(true, { children: true, texture: true });
         tileStore.clear();
       };

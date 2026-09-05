@@ -7,6 +7,7 @@ import { connectSettlements, normalizeRoadOverlaps } from './roads';
 import { authorFortifications, deriveGates, restoreFortifiedCorners } from './fortifications';
 import { placeHousing } from './housing';
 import { createFrontierMarkers, selectSpawn } from './worldFeatures';
+import { placeGoblinNests } from './goblinPlacement';
 export { CHUNK_SIZE, GENERATOR_VERSION, MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from './worldConstants';
 export { tileAt, evictChunkCache, chunkRangeForViewport, clampPoint } from './worldTiles';
 
@@ -22,7 +23,9 @@ export function createWorld(seed = 7331): WorldMap {
   normalizeRoadOverlaps(editor, settlements, seed);
   deriveGates(editor, settlements);
   placeHousing(editor, settlements, seed);
+  const worldReader = { width: MAP_WIDTH, height: MAP_HEIGHT, getTile: (point: { col: number; row: number }) => editor.get(point) ?? terrain.baseTile(point) };
+  const goblinNests = placeGoblinNests(editor, settlements, worldReader, seed);
   const features = createFrontierMarkers();
-  return { width: MAP_WIDTH, height: MAP_HEIGHT, seed, countries, settlements, roads: routeStage.roads, features, spawn: selectSpawn(settlements, countries[0]!.id), tiles: [], overlays: new Map(editor.entries()), chunkCache: new Map() };
+  return { width: MAP_WIDTH, height: MAP_HEIGHT, seed, countries, settlements, roads: routeStage.roads, features, goblinNests, spawn: selectSpawn(settlements, countries[0]!.id), tiles: [], overlays: new Map(editor.entries()), chunkCache: new Map() };
 }
 export const createMap = createWorld;

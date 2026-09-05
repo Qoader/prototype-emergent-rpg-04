@@ -51,6 +51,10 @@ export type Settlement = Point & {
   gates: SettlementGate[];
 };
 export type WorldFeature = Point & { kind: 'frontier-marker' };
+export type GoblinNest = Point & {
+  id: string;
+  spawnTiles: [Point, Point, Point];
+};
 
 export type WorldMap = {
   width: number;
@@ -64,4 +68,5 @@ export type WorldMap = {
   settlements?: Settlement[];
   roads?: WorldRoad[];
   features?: WorldFeature[];
+  goblinNests?: GoblinNest[];
 };
