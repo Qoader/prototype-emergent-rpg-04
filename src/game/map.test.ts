@@ -1,7 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, GENERATOR_VERSION, tileAt, TILE_SIZE } from './map';
+import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, generateRoutePoints, GENERATOR_VERSION, tileAt, TILE_SIZE } from './map';
 import { findPath } from './pathfinding';
 import type { Tile } from './types';
+
+describe('natural route generation', () => {
+  const start = { col: 10, row: 20 };
+  const end = { col: 70, row: 80 };
+
+  it('generates deterministic monotonic cardinal routes with natural bends', () => {
+    const points = generateRoutePoints(7331, start, end);
+    expect(generateRoutePoints(7331, start, end)).toEqual(points);
+    expect(generateRoutePoints(7332, start, end)).not.toEqual(points);
+    expect(points[0]).toEqual(start);
+    expect(points.at(-1)).toEqual(end);
+    expect(new Set(points.map((point) => `${point.col},${point.row}`)).size).toBe(points.length);
+    expect(points.length).toBe(Math.abs(end.col - start.col) + Math.abs(end.row - start.row) + 1);
+    for (let index = 1; index < points.length; index += 1) {
+      const previous = points[index - 1]!;
+      const current = points[index]!;
+      expect(Math.abs(current.col - previous.col) + Math.abs(current.row - previous.row)).toBe(1);
+      expect(current.col).toBeGreaterThanOrEqual(Math.min(start.col, end.col));
+      expect(current.col).toBeLessThanOrEqual(Math.max(start.col, end.col));
+      expect(current.row).toBeGreaterThanOrEqual(Math.min(start.row, end.row));
+      expect(current.row).toBeLessThanOrEqual(Math.max(start.row, end.row));
+    }
+    const turns = points.slice(2).reduce((count, point, index) => {
+      const previous = points[index + 1]!;
+      const before = points[index]!;
+      const priorAxis = before.col === previous.col ? 'vertical' : 'horizontal';
+      const axis = previous.col === point.col ? 'vertical' : 'horizontal';
+      return count + (axis === priorAxis ? 0 : 1);
+    }, 0);
+    expect(turns).toBeGreaterThan(1);
+  });
+
+  it('keeps aligned endpoints straight', () => {
+    expect(generateRoutePoints(7331, { col: 4, row: 9 }, { col: 30, row: 9 }).every((point) => point.row === 9)).toBe(true);
+    expect(generateRoutePoints(7331, { col: 4, row: 9 }, { col: 4, row: 30 }).every((point) => point.col === 4)).toBe(true);
+  });
+});
 
 describe('heroic fantasy world generation', () => {
   it('selects only viewport chunks with one guard chunk', () => {
@@ -177,6 +214,41 @@ describe('heroic fantasy world generation', () => {
       const candidates = [...(map.overlays?.values() ?? [])];
       for (const tile of candidates) for (const row of [tile.row - 1, tile.row]) for (const col of [tile.col - 1, tile.col]) {
         expect(isRoute(col, row) && isRoute(col + 1, row) && isRoute(col, row + 1) && isRoute(col + 1, row + 1)).toBe(false);
+      }
+    }
+  }, 30000);
+
+  it('keeps every logical road connected through route tiles', () => {
+    for (const seed of [1, 7331, 424242]) {
+      const map = createMap(seed);
+      const route = (point: { col: number; row: number }) => {
+        const kind = tileAt(map, point)?.kind;
+        return kind === 'road' || kind === 'bridge' || kind === 'gate';
+      };
+      const connected = (start: { col: number; row: number }, goal: { col: number; row: number }) => {
+        const queue = [start];
+        const seen = new Set([`${start.col},${start.row}`]);
+        for (let index = 0; index < queue.length; index += 1) {
+          const point = queue[index]!;
+          if (point.col === goal.col && point.row === goal.row) return true;
+          for (const neighbor of [
+            { col: point.col, row: point.row - 1 },
+            { col: point.col + 1, row: point.row },
+            { col: point.col, row: point.row + 1 },
+            { col: point.col - 1, row: point.row }
+          ]) {
+            const id = `${neighbor.col},${neighbor.row}`;
+            if (route(neighbor) && !seen.has(id)) {
+              seen.add(id);
+              queue.push(neighbor);
+            }
+          }
+        }
+        return false;
+      };
+      for (const road of map.roads ?? []) {
+        const [from, to] = road.settlementIds.map((id) => map.settlements?.find((settlement) => settlement.id === id));
+        expect(from && to && connected(from, to)).toBe(true);
       }
     }
   }, 30000);

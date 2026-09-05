@@ -80,6 +80,55 @@ const clusteredNoise = (seed: number, col: number, row: number) => {
   const south = at(gx, gy + 1) * (1 - tx) + at(gx + 1, gy + 1) * tx;
   return north * (1 - ty) + south * ty;
 };
+
+const ROUTE_MIN_RUN = 3;
+const ROUTE_MAX_RUN = 8;
+
+/**
+ * Generate a deterministic, monotonic cardinal route between two points.
+ *
+ * The ordered endpoints are included in the route seed so the same route is
+ * reproduced when the corridor is reopened after settlement fortification.
+ * Every step reduces Manhattan distance, while short seeded runs give the
+ * route a natural rhythm of bends without allowing it to wander or loop.
+ */
+export function generateRoutePoints(seed: number, a: Point, b: Point): Point[] {
+  const routeSeed = (
+    seed ^
+    Math.imul(a.col, 374761393) ^
+    Math.imul(a.row, 668265263) ^
+    Math.imul(b.col, 1274126177) ^
+    Math.imul(b.row, 2246822519)
+  ) >>> 0;
+  const points: Point[] = [{ ...a }];
+  let col = a.col;
+  let row = a.row;
+  let segment = 0;
+
+  while (col !== b.col || row !== b.row) {
+    const horizontalDistance = Math.abs(b.col - col);
+    const verticalDistance = Math.abs(b.row - row);
+    const totalDistance = horizontalDistance + verticalDistance;
+    const randomAxis = hash(routeSeed, segment, 7919);
+    const horizontal = horizontalDistance > 0 &&
+      (verticalDistance === 0 || randomAxis < horizontalDistance / totalDistance);
+    const distance = horizontal ? horizontalDistance : verticalDistance;
+    const randomRun = hash(routeSeed ^ 0x9e3779b9, segment, 1543);
+    const run = Math.min(
+      distance,
+      ROUTE_MIN_RUN + Math.floor(randomRun * (ROUTE_MAX_RUN - ROUTE_MIN_RUN + 1))
+    );
+    const dc = horizontal ? Math.sign(b.col - col) : 0;
+    const dr = horizontal ? 0 : Math.sign(b.row - row);
+    for (let step = 0; step < run; step += 1) {
+      col += dc;
+      row += dr;
+      points.push({ col, row });
+    }
+    segment += 1;
+  }
+  return points;
+}
 function baseTile(map: WorldMap, p: Point): Tile {
   const country = map.countries?.[Math.min(4, Math.floor(p.col / (MAP_WIDTH / 5)))] ?? realms[0] as Country;
   const edge = p.col < 3 || p.row < 3 || p.col >= MAP_WIDTH - 3 || p.row >= MAP_HEIGHT - 3;
@@ -202,7 +251,22 @@ export function createMap(seed = 7331): WorldMap {
     }
   });
   const route = (a: Point, b: Point) => {
-    let p = { ...a };
+    const lead = (point: Point, other: Point) => {
+      const settlement = settlements.find((candidate) => candidate.col === point.col && candidate.row === point.row);
+      if (!settlement) return point;
+      const horizontal = Math.abs(other.col - point.col) >= Math.abs(other.row - point.row);
+      const distance = settlement.radius + 1;
+      return horizontal
+        ? { col: point.col + Math.sign(other.col - point.col) * distance, row: point.row }
+        : { col: point.col, row: point.row + Math.sign(other.row - point.row) * distance };
+    };
+    const from = lead(a, b);
+    const to = lead(b, a);
+    const points = [
+      ...generateRoutePoints(seed, a, from),
+      ...generateRoutePoints(seed, from, to).slice(1),
+      ...generateRoutePoints(seed, to, b).slice(1)
+    ];
     const pave = (point: Point) => {
       const old = baseTile(
         { seed, countries, width: MAP_WIDTH, height: MAP_HEIGHT } as WorldMap,
@@ -215,18 +279,7 @@ export function createMap(seed = 7331): WorldMap {
         groundKind: bridge ? 'water' : 'grass'
       });
     };
-    pave(p);
-    let guard = 0;
-    while (p.col !== b.col && guard++ < MAP_WIDTH + 4) {
-      p = { col: p.col + Math.sign(b.col - p.col), row: p.row };
-      pave(p);
-    }
-    guard = 0;
-    while (p.row !== b.row && guard++ < MAP_HEIGHT + 4) {
-      p = { col: p.col, row: p.row + Math.sign(b.row - p.row) };
-      pave(p);
-    }
-    pave(p);
+    for (const point of points) pave(point);
   };
   const connect = (a: Settlement, b: Settlement) => {
     roads.push({ id: `road-${roads.length}`, settlementIds: [a.id, b.id] });
@@ -276,6 +329,93 @@ export function createMap(seed = 7331): WorldMap {
     ]) {
       put(point, { kind: s.kind === 'capital' ? 'tower' : 'wall', walkable: false, settlementId: s.id });
     }
+  }
+  // Collapse accidental overlaps while preserving the visible route graph.
+  // The authored roads are logical connections, so redundant overlapping
+  // tiles may be removed as long as no former route neighbor is disconnected.
+  const routeTiles = new Set<string>();
+  for (const tile of overlays.values()) {
+    if (tile.kind === 'road' || tile.kind === 'bridge') routeTiles.add(k(tile));
+  }
+  const cardinalNeighbors = (point: Point) => [
+    { col: point.col, row: point.row - 1 },
+    { col: point.col + 1, row: point.row },
+    { col: point.col, row: point.row + 1 },
+    { col: point.col - 1, row: point.row }
+  ];
+  const anchors = [...routeTiles]
+    .map((id) => {
+      const [col, row] = id.split(',').map(Number);
+      return { col, row };
+    })
+    .filter(({ col, row }) =>
+      routeTiles.has(k({ col: col + 1, row })) &&
+      routeTiles.has(k({ col, row: row + 1 })) &&
+      routeTiles.has(k({ col: col + 1, row: row + 1 }))
+    )
+    .sort((a, b) => a.row - b.row || a.col - b.col);
+  const restoreUnderlay = (point: Point) => {
+    const settlement = settlements.find((candidate) =>
+      point.col >= candidate.bounds.left && point.col <= candidate.bounds.right &&
+      point.row >= candidate.bounds.top && point.row <= candidate.bounds.bottom
+    );
+    if (!settlement) {
+      overlays.delete(k(point));
+      return;
+    }
+    const perimeter = point.col === settlement.bounds.left || point.col === settlement.bounds.right ||
+      point.row === settlement.bounds.top || point.row === settlement.bounds.bottom;
+    if (perimeter && settlement.kind !== 'village') {
+      const corner = (point.col === settlement.bounds.left || point.col === settlement.bounds.right) &&
+        (point.row === settlement.bounds.top || point.row === settlement.bounds.bottom);
+      put(point, { kind: corner && settlement.kind === 'capital' ? 'tower' : 'wall', walkable: false, settlementId: settlement.id });
+      return;
+    }
+    put(point, { kind: 'grass', walkable: true, settlementId: settlement.id });
+  };
+  const canRemove = (point: Point) => {
+    const neighbors = cardinalNeighbors(point).filter((neighbor) => routeTiles.has(k(neighbor)));
+    if (neighbors.length < 2) return true;
+    // In a 2x2 block, a degree-two tile's two neighbors are the other two
+    // sides of that block and remain connected around the removed corner.
+    if (neighbors.length === 2) return true;
+    routeTiles.delete(k(point));
+    const reachable = new Set<string>([k(neighbors[0]!)])
+      , queue = [neighbors[0]!];
+    for (let index = 0; index < queue.length && !neighbors.every((neighbor) => reachable.has(k(neighbor))); index += 1) {
+      for (const neighbor of cardinalNeighbors(queue[index]!)) {
+        if (routeTiles.has(k(neighbor)) && !reachable.has(k(neighbor))) {
+          reachable.add(k(neighbor));
+          queue.push(neighbor);
+        }
+      }
+    }
+    routeTiles.add(k(point));
+    return neighbors.every((neighbor) => reachable.has(k(neighbor)));
+  };
+  for (const anchor of anchors) {
+    const block = [
+      anchor,
+      { col: anchor.col + 1, row: anchor.row },
+      { col: anchor.col, row: anchor.row + 1 },
+      { col: anchor.col + 1, row: anchor.row + 1 }
+    ];
+    if (!block.every((point) => routeTiles.has(k(point)))) continue;
+    const candidates = block
+      .filter((point) => !settlements.some((settlement) => settlement.col === point.col && settlement.row === point.row))
+      .map((point) => ({
+        point,
+        degree: cardinalNeighbors(point).filter((neighbor) => routeTiles.has(k(neighbor))).length,
+        preference: cardinalNeighbors(point).filter((neighbor) => routeTiles.has(k(neighbor))).length === 2 ? 0 : 1,
+        tie: hash(seed, point.col, point.row)
+      }))
+      .sort((a, b) => a.preference - b.preference || a.degree - b.degree || a.tie - b.tie);
+    const removable = candidates.find(({ point }) => canRemove(point));
+    if (!removable) {
+      throw new Error(`Unable to normalize route overlap at ${anchor.col},${anchor.row}`);
+    }
+    routeTiles.delete(k(removable.point));
+    restoreUnderlay(removable.point);
   }
   // Derive gates from the final road topology so metadata matches rendered tiles.
   const isRoute = (point: Point) => {
