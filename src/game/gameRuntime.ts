@@ -21,7 +21,6 @@ export type GameRuntimeOptions = {
   map: WorldMap;
   controller: GameController;
   tileStore: TileStore;
-  onDestination?: (point: { col: number; row: number }) => void;
   onLocation?: (label: string) => void;
   onError?: () => void;
 };
@@ -32,7 +31,6 @@ export function createGameRuntime({
   map,
   controller,
   tileStore,
-  onDestination,
   onLocation,
   onError
 }: GameRuntimeOptions): GameRuntime {
@@ -228,7 +226,7 @@ export function createGameRuntime({
       const pointerDown = (event: globalThis.PointerEvent) => {
         const rect = canvas.getBoundingClientRect();
         if (!acceptsPointer(event.pointerType, event.button)) return;
-        const destination = controller.requestDestination(
+        controller.requestDestination(
           tilePointFromPointer({
             clientX: event.clientX,
             clientY: event.clientY,
@@ -236,8 +234,6 @@ export function createGameRuntime({
             camera
           })
         );
-        if (!destination) return;
-        onDestination?.(destination);
       };
       canvas.addEventListener('pointerdown', pointerDown);
       const dispose = () => {

@@ -6,7 +6,7 @@
   import { createGameRuntime } from '../game/gameRuntime';
 
   let host: HTMLElement;
-  let status = 'Ready — tap the map to move.';
+  let status = '';
   let placeName = '';
   const map = createWorld();
   const tileStore = createTileStore(map);
@@ -18,9 +18,6 @@
       map,
       controller,
       tileStore,
-      onDestination: (destination) => {
-        status = `Moving to column ${destination.col + 1}, row ${destination.row + 1}.`;
-      },
       onLocation: (label) => {
         placeName = label;
       },
@@ -33,7 +30,9 @@
 </script>
 
 <section class="game" bind:this={host} aria-label="Emergent RPG map">
-  <p class="status" data-testid="player-status" aria-live="polite">{status}</p>
+  {#if status}
+    <p class="status" data-testid="player-status" aria-live="polite">{status}</p>
+  {/if}
   {#if placeName}
     <p class="place" data-testid="location-overlay" aria-live="polite">{placeName}</p>
   {/if}
