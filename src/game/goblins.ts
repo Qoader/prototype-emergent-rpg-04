@@ -115,5 +115,6 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
   let accumulator = 0;
   const tick = (deltaSeconds: number, targets: readonly GoblinTarget[] = []) => { accumulator += Math.min(Math.max(0, deltaSeconds), 0.1); while (accumulator >= 1 / 60) { for (const state of states) step(state, 1 / 60, targets); accumulator -= 1 / 60; } };
   const snapshots = () => states.map((state): GoblinSnapshot => ({ id: state.id, nestId: state.nest.id, position: { ...state.movement.position }, tile: { ...state.movement.tile }, facing: state.movement.facing, walking: state.movement.route.length > 0, phase: state.phase, targetId: state.targetId }));
-  return { tick, snapshots };
+  const remove = (id: string) => { const index = states.findIndex((state) => state.id === id); if (index < 0) return false; states.splice(index, 1); return true; };
+  return { tick, snapshots, remove };
 }

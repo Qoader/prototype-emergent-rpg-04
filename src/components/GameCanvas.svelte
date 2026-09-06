@@ -4,6 +4,7 @@
   import { createWorld } from '../game/worldGeneration';
   import { createTileStore } from '../game/tileStore';
   import { createGameRuntime } from '../game/gameRuntime';
+  import BattleScreen from './BattleScreen.svelte';
 
   let host: HTMLElement;
   let status = '';
@@ -11,8 +12,10 @@
   const map = createWorld();
   const tileStore = createTileStore(map);
   const controller = createGameController(map, tileStore);
+  let mode = controller.mode;
 
   onMount(() => {
+    const unsubscribe = controller.subscribe(() => { mode = controller.mode; });
     const runtime = createGameRuntime({
       host,
       map,
@@ -25,11 +28,12 @@
         status = 'Unable to load the map renderer. Please reload the page.';
       }
     });
-    return () => runtime.destroy();
+    return () => { unsubscribe(); runtime.destroy(); };
   });
 </script>
 
 <section class="game" bind:this={host} aria-label="Emergent RPG map">
+  {#if mode !== 'exploration'}<BattleScreen {controller} />{/if}
   {#if status}
     <p class="status" data-testid="player-status" aria-live="polite">{status}</p>
   {/if}

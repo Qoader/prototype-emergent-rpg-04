@@ -225,7 +225,14 @@ export function createGameRuntime({
           resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
           resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
         }
-        for (const npc of controller.goblins.snapshots()) {
+        const goblins = controller.goblins.snapshots();
+        const liveGoblinIds = new Set(goblins.map((npc) => npc.id));
+        for (const [id, resource] of goblinViews)
+          if (!liveGoblinIds.has(id)) {
+            resource.sprite.view.destroy({ children: true });
+            goblinViews.delete(id);
+          }
+        for (const npc of goblins) {
           const resource = goblinViews.get(npc.id); if (!resource) continue;
           const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
           resource.time = resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0; resource.state = state;
