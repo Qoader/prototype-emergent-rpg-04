@@ -265,8 +265,9 @@ export function createGameRuntime({
         if (wasHidden) { wasHidden = false; return; }
         const delta = Math.min(ticker.deltaMS / 1000, 0.1);
         controller.tick(delta);
-        updateLocation();
-        draw(delta);
+        const paused = controller.mode !== 'exploration';
+        if (!paused) updateLocation();
+        draw(paused ? 0 : delta);
       };
       let wasHidden = false;
       const visibility = () => { if (document.hidden) wasHidden = true; };

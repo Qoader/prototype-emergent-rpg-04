@@ -14,4 +14,20 @@ export function reachable(state: BattleState, actorId: string): Map<string, { po
   }
   return result;
 }
+/** Unbounded BFS used by tactical AI planning. */
+export function search(state: BattleState, actorId: string) {
+  const actor = state.combatants[actorId];
+  const result = new Map<string, { point: Point; distance: number; previous?: string }>();
+  if (!actor) return result;
+  const start = key(actor.position); result.set(start, { point: { ...actor.position }, distance: 0 });
+  const queue: Point[] = [actor.position]; let head = 0;
+  while (head < queue.length) {
+    const current = queue[head++]!; const node = result.get(key(current))!;
+    for (const next of neighbors(current)) {
+      const k = key(next); if (!inBounds(state, next) || occupied(state, next, actorId) || result.has(k)) continue;
+      result.set(k, { point: { ...next }, distance: node.distance + 1, previous: key(current) }); queue.push(next);
+    }
+  }
+  return result;
+}
 export const distance = (a: Point, b: Point) => Math.abs(a.col - b.col) + Math.abs(a.row - b.row);

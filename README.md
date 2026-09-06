@@ -29,6 +29,8 @@ The map is procedural but seeded, so movement and pathfinding are deterministic.
 - `src/game/tileStore.ts` exposes read-only tile access and owns procedural cache eviction.
 - `src/game/pathfinding.ts` owns bounded route planning; callers receive the destination and the route as one result.
 - `src/game/gameController.ts` owns movement state and accepts logical tile requests. Canvas coordinate conversion remains its input adapter.
+- `src/game/battle/` owns renderer-independent tactical rules, grid search, and deterministic goblin decisions. `src/game/encounters.ts` owns contact queries and `src/game/checkpoints.ts` owns settlement-entry respawn checkpoints.
+- `src/game/gameController.ts` coordinates exploration, battle snapshots/commands, fixed-step world simulation, pacing, and one-time battle outcomes; Svelte components only render snapshots and dispatch commands.
 - `src/game/camera.ts` and `src/game/location.ts` contain pure camera and world-location queries.
 - `src/game/tileIllustration.ts` and `src/game/playerSprite.ts` own Pixi drawing primitives.
 - `GameCanvas.svelte` composes the runtime and presentation lifecycle. Pixi listeners, tickers, and asynchronous initialization are disposed together.

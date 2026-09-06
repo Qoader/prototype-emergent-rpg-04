@@ -126,7 +126,8 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
   let accumulator = 0;
   const tick = (delta: number) => { accumulator += Math.min(Math.max(0, delta), 0.1); while (accumulator >= 1 / 60) { for (const state of states) tickOne(state, 1 / 60); accumulator -= 1 / 60; } };
   const snapshots = () => states.map((s): AdventurerSnapshot => ({ id: s.id, position: { ...s.movement.position }, tile: { ...s.movement.tile }, facing: s.movement.facing, walking: s.movement.route.length > 0, phase: s.phase, currentSettlementId: s.current, previousSettlementId: s.previous, destinationSettlementId: s.destination }));
-  return { tick, snapshots };
+  const step = (delta: number) => { for (const state of states) tickOne(state, delta); };
+  return { tick, step, snapshots };
 }
 
 export type AdventurerSimulation = ReturnType<typeof createAdventurerSimulation>;

@@ -103,7 +103,7 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
     if (!destination) { state.pause = 1; return; }
     const route = routeTo(state, destination, false, true); if (route) setRoute(state, route, destination); else state.pause = 1;
   };
-  const step = (state: State, dt: number, targets: readonly GoblinTarget[]) => {
+  const stepState = (state: State, dt: number, targets: readonly GoblinTarget[]) => {
     const before = state.movement.tile;
     advanceMovement(state.movement, dt, state.phase === 'pursuing' ? PURSUIT_SPEED : ROAM_SPEED);
     if (key(before) !== key(state.movement.tile)) { const tileKey = key(state.movement.tile); const prior = state.trailIndex.get(tileKey); if (prior !== undefined) { state.trail.length = prior + 1; } else { state.trailIndex.set(tileKey, state.trail.length); state.trail.push({ ...state.movement.tile }); } }
@@ -113,8 +113,9 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
     if (state.phase === 'roaming' && !state.movement.route.length && state.destination) { state.destination = null; state.pause = 1 + state.random() * 2; }
   };
   let accumulator = 0;
-  const tick = (deltaSeconds: number, targets: readonly GoblinTarget[] = []) => { accumulator += Math.min(Math.max(0, deltaSeconds), 0.1); while (accumulator >= 1 / 60) { for (const state of states) step(state, 1 / 60, targets); accumulator -= 1 / 60; } };
+  const tick = (deltaSeconds: number, targets: readonly GoblinTarget[] = []) => { accumulator += Math.min(Math.max(0, deltaSeconds), 0.1); while (accumulator >= 1 / 60) { for (const state of states) stepState(state, 1 / 60, targets); accumulator -= 1 / 60; } };
   const snapshots = () => states.map((state): GoblinSnapshot => ({ id: state.id, nestId: state.nest.id, position: { ...state.movement.position }, tile: { ...state.movement.tile }, facing: state.movement.facing, walking: state.movement.route.length > 0, phase: state.phase, targetId: state.targetId }));
   const remove = (id: string) => { const index = states.findIndex((state) => state.id === id); if (index < 0) return false; states.splice(index, 1); return true; };
-  return { tick, snapshots, remove };
+  const step = (delta: number, targets: readonly GoblinTarget[] = []) => { for (const state of states) stepState(state, delta, targets); };
+  return { tick, step, snapshots, remove };
 }

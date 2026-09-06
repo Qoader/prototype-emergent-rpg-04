@@ -1,0 +1,10 @@
+import { describe, expect, it } from 'vitest';
+import { createGameController } from './gameController';
+import type { WorldMap } from './types';
+const map: WorldMap = { width:8,height:8,spawn:{col:1,row:1},tiles:Array.from({length:64},(_,i)=>({col:i%8,row:Math.floor(i/8),kind:'grass' as const,walkable:true})),goblinNests:[{id:'n',col:1,row:1,spawnTiles:[{col:1,row:1},{col:2,row:1},{col:1,row:2}]}]};
+describe('controller battle coordination', () => {
+ it('starts contact and waits 250ms before exactly one AI command', () => { const c=createGameController(map); c.tick(1/60); expect(c.mode).toBe('battle'); c.dispatchBattle({kind:'end-turn',actorId:'player'}); const before=c.battle!.combatants['goblin-n-0']!.position; c.tick(.24); expect(c.battle!.combatants['goblin-n-0']!.position).toEqual(before); c.tick(.01); expect(c.battle!.combatants['goblin-n-0']!.position).not.toEqual(before); });
+ it('blocks overworld navigation while battle is active', () => { const c=createGameController(map); c.tick(1/60); expect(c.requestDestination({col:4,row:4})).toBeNull(); });
+ it('removes a victorious goblin exactly once and returns from result', () => { const c=createGameController(map); c.tick(1/60); const battle=c.battle!; battle.combatants.player.position={col:4,row:3}; battle.combatants['goblin-n-0']!.position={col:5,row:3}; battle.combatants['goblin-n-0']!.hp=4; expect(c.dispatchBattle({kind:'attack',actorId:'player',targetId:'goblin-n-0'})).toBe(true); expect(c.mode).toBe('result'); expect(c.goblins.snapshots().some(g=>g.id==='goblin-n-0')).toBe(false); c.continueFromResult(); expect(c.mode).toBe('exploration'); c.continueFromResult(); expect(c.goblins.snapshots().some(g=>g.id==='goblin-n-0')).toBe(false); });
+ it('relocates a defeated player to the checkpoint', () => { const c=createGameController(map); c.tick(1/60); const battle=c.battle!; battle.combatants.player.position={col:4,row:3}; battle.combatants['goblin-n-0']!.position={col:5,row:3}; battle.combatants.player.hp=3; expect(c.dispatchBattle({kind:'end-turn',actorId:'player'})).toBe(true); c.tick(.25); expect(c.mode).toBe('result'); expect(c.movement.tile).toEqual(map.spawn); });
+});

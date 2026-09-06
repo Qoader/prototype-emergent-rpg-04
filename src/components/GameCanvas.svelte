@@ -5,17 +5,20 @@
   import { createTileStore } from '../game/tileStore';
   import { createGameRuntime } from '../game/gameRuntime';
   import BattleScreen from './BattleScreen.svelte';
+  import { createBattleFixture } from '../game/e2eBattleFixture';
 
   let host: HTMLElement;
   let status = '';
   let placeName = '';
-  const map = createWorld();
+  const map = window.location.search.includes('battle-fixture') ? createBattleFixture(!window.location.search.includes('battle-fixture-solo'), !window.location.search.includes('battle-fixture-defeat')) : createWorld();
   const tileStore = createTileStore(map);
   const controller = createGameController(map, tileStore);
-  let mode = controller.mode;
+  if (window.location.search.includes('battle-fixture-defeat')) controller.startBattleForTest('goblin-fixture-nest-0');
+  let snapshot = controller.getSnapshot();
+  $: mode = snapshot.mode;
 
   onMount(() => {
-    const unsubscribe = controller.subscribe(() => { mode = controller.mode; });
+    const unsubscribe = controller.subscribe((next) => { snapshot = next; });
     const runtime = createGameRuntime({
       host,
       map,
@@ -33,7 +36,7 @@
 </script>
 
 <section class="game" bind:this={host} aria-label="Emergent RPG map">
-  {#if mode !== 'exploration'}<BattleScreen {controller} />{/if}
+  {#if mode !== 'exploration'}<BattleScreen battle={snapshot.battle} dispatch={controller.dispatchBattle} continueFromResult={controller.continueFromResult} />{/if}
   {#if status}
     <p class="status" data-testid="player-status" aria-live="polite">{status}</p>
   {/if}
