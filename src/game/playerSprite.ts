@@ -12,13 +12,14 @@ function frame(animation: PlayerAnimation, facing: Facing, index: number, advent
   const bob = animation === 'idle' ? (index ? -1 : 0) : index % 2;
   const step = animation === 'walk' ? ([0, 1, 0, -1][index] ?? 0) : 0;
   const skin = goblin ? '#76a653' : '#f2b38f'; const hair = goblin ? '#355b35' : '#3c2630'; const coat = goblin ? '#4f6b3b' : adventurer ? '#55734f' : '#4c6f8a'; const trim = goblin ? '#b18b4c' : adventurer ? '#b38b55' : '#d9b36c'; const boot = '#3a2c32';
+  const face = goblin ? { x: -13, y: -38, width: 26, height: 8 } : { x: -8, y: -36, width: 16, height: 10 };
   // The logical frame is 48x48, centered on x=0, with the feet on y=0.
   if (facing === 'north') {
-    g.rect(-10, -46 + bob, 20, 12).fill(hair).rect(-13, -38 + bob, 26, 8).fill(skin);
+    g.rect(-10, -46 + bob, 20, 12).fill(hair).rect(face.x, face.y + bob, face.width, face.height).fill(skin);
     if (goblin) g.poly([-13, -37 + bob, -22, -43 + bob, -12, -42 + bob]).fill(skin).poly([13, -37 + bob, 22, -43 + bob, 12, -42 + bob]).fill(skin);
     g.rect(-16, -26 + bob, 32, 18).fill(coat).rect(-22, -26 + bob, 6, 14).fill(trim).rect(16, -26 + bob, 6, 14).fill(trim);
   } else {
-    g.rect(-10, -46 + bob, 20, 12).fill(hair).rect(-13, -38 + bob, 26, 8).fill(skin);
+    g.rect(-10, -46 + bob, 20, 12).fill(hair).rect(face.x, face.y + bob, face.width, face.height).fill(skin);
     if (goblin) g.poly([-13, -37 + bob, -22, -43 + bob, -12, -42 + bob]).fill(skin).poly([13, -37 + bob, 22, -43 + bob, 12, -42 + bob]).fill(skin);
     if (facing === 'south') g.rect(-5, -32 + bob, 2, 2).fill('#14213d').rect(3, -32 + bob, 2, 2).fill('#14213d');
     if (facing === 'east') g.rect(3, -32 + bob, 2, 2).fill('#14213d');
