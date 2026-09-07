@@ -27,11 +27,21 @@ test.describe('deterministic tactical battle fixture', () => {
     await expect(page.locator('.battle')).toHaveCSS('overflow', 'auto');
   });
   test('wins through real movement and attack controls, then continues', async ({ page }) => {
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
     await page.goto('/?battle-fixture-solo'); await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
     await page.getByRole('gridcell', { name: '4, 3' }).click(); await page.getByRole('button', { name: 'Attack' }).click();
     await page.getByRole('button', { name: 'End Turn' }).click(); await page.waitForTimeout(300);
     await page.getByRole('button', { name: 'Attack' }).click(); await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
     await page.getByRole('button', { name: 'Continue' }).click(); await expect(page.getByRole('region', { name: 'Tactical battle' })).toHaveCount(0);
+    await expect(page.locator('canvas')).toHaveCount(1);
+    const gameCanvas = page.getByTestId('game-canvas');
+    await expect(gameCanvas).toBeVisible();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    const bounds = await gameCanvas.boundingBox();
+    expect(bounds?.width ?? 0).toBeGreaterThan(0);
+    expect(bounds?.height ?? 0).toBeGreaterThan(0);
+    expect(pageErrors).toEqual([]);
   });
   test('loses through real turns and respawns at settlement', async ({ page }) => {
     await page.goto('/?battle-fixture-defeat'); await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
