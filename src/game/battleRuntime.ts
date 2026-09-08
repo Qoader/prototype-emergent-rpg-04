@@ -32,7 +32,9 @@ export function createBattleRuntime(host: HTMLElement, options: BattleRuntimeOpt
   const destroyInitializedApplication = () => {
     if (!initialized || destroyed) return;
     destroyed = true;
-    try { app.destroy(true, { children: true }); } catch (error) { reportError(error); }
+    // The map application remains alive while a battle is mounted/unmounted.
+    // Releasing Pixi's process-wide batches here invalidates the map renderer.
+    try { app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true }); } catch (error) { reportError(error); }
     player = undefined;
     goblin = undefined;
   };

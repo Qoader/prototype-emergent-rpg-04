@@ -22,8 +22,10 @@ export type GameRuntimeOptions = {
   controller: GameController;
   tileStore: TileStore;
   onLocation?: (label: string) => void;
-  onError?: () => void;
+  onError?: (failure: RuntimeFailure) => void;
+  applicationFactory?: () => Application;
 };
+export type RuntimeFailure = { source: 'map'; phase: 'initialization' | 'frame' | 'cleanup' | 'context-lost'; cause: unknown };
 export type GameRuntime = { destroy: () => void };
 
 export function createGameRuntime({
@@ -32,11 +34,19 @@ export function createGameRuntime({
   controller,
   tileStore,
   onLocation,
-  onError
+  onError,
+  applicationFactory
 }: GameRuntimeOptions): GameRuntime {
   const movement = controller.movement;
-  const app = new Application();
+  const app = (applicationFactory ?? (() => new Application()))();
   let disposed = false;
+  let failed = false;
+  let errorReported = false;
+  const reportFailure = (phase: RuntimeFailure['phase'], cause: unknown) => {
+    if (errorReported) return;
+    errorReported = true;
+    try { onError?.({ source: 'map', phase, cause }); } catch { /* diagnostics must not break cleanup */ }
+  };
   let initialized = false;
   const world = new Container();
   const groundLayer = new Container();
@@ -54,13 +64,14 @@ export function createGameRuntime({
     .init({
       background: '#0d1726',
       antialias: false,
+      autoStart: false,
       resolution: Math.min(window.devicePixelRatio, 2),
       autoDensity: true,
       resizeTo: host
     })
     .then(() => {
       if (disposed) {
-        app.destroy(true, { children: true, texture: true });
+        app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true, texture: true });
         return;
       }
       initialized = true;
@@ -261,19 +272,35 @@ export function createGameRuntime({
         }, 2600);
       };
       const tick = (ticker: { deltaMS: number }) => {
-        if (document.hidden) return;
+        if (disposed || failed || document.hidden) return;
         if (wasHidden) { wasHidden = false; return; }
-        const delta = Math.min(ticker.deltaMS / 1000, 0.1);
-        controller.tick(delta);
-        const paused = controller.mode !== 'exploration';
-        if (!paused) updateLocation();
-        draw(paused ? 0 : delta);
+        try {
+          const delta = Math.min(ticker.deltaMS / 1000, 0.1);
+          controller.tick(delta);
+          const paused = controller.mode !== 'exploration';
+          if (!paused) updateLocation();
+          draw(paused ? 0 : delta);
+          app.render();
+        } catch (error) {
+          failed = true;
+          reportFailure('frame', error);
+          cleanup();
+        }
       };
       let wasHidden = false;
       const visibility = () => { if (document.hidden) wasHidden = true; };
+      try { draw(); app.render(); } catch (error) {
+        failed = true;
+        reportFailure('frame', error);
+        cleanup();
+      }
+      if (disposed || failed) return;
       document.addEventListener('visibilitychange', visibility);
+      // TickerPlugin installs app.render at low priority during init. Remove
+      // that listener so the guarded tick below is the sole render boundary.
+      app.ticker.remove(app.render, app);
       app.ticker.add(tick);
-      draw();
+      app.ticker.start();
       const pointerDown = (event: globalThis.PointerEvent) => {
         const rect = canvas.getBoundingClientRect();
         if (!acceptsPointer(event.pointerType, event.button)) return;
@@ -287,32 +314,45 @@ export function createGameRuntime({
         );
       };
       canvas.addEventListener('pointerdown', pointerDown);
+      const contextLost = (event: Event) => {
+        event.preventDefault();
+        failed = true;
+        reportFailure('context-lost', new Error('WebGL context lost'));
+        cleanup();
+      };
+      canvas.addEventListener('webglcontextlost', contextLost);
       const dispose = () => {
         if (disposed) return;
         disposed = true;
         app.ticker.remove(tick);
+        app.ticker.stop();
         document.removeEventListener('visibilitychange', visibility);
         canvas.removeEventListener('pointerdown', pointerDown);
+        canvas.removeEventListener('webglcontextlost', contextLost);
         if (locationTimer) clearTimeout(locationTimer);
         chunkResources.destroyAll();
         for (const resource of [...adventurerViews.values(), ...goblinViews.values()]) resource.sprite.view.destroy({ children: true });
         adventurerViews.clear(); goblinViews.clear();
-        app.destroy(true, { children: true, texture: true });
+        app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true, texture: true });
         tileStore.clear();
       };
       // The component cleanup can happen after initialization; retain the
       // disposer so every listener and ticker is released exactly once.
       cleanup = dispose;
     })
-    .catch(() => {
-      if (!disposed) onError?.();
+    .catch((error: unknown) => {
+      if (!disposed) {
+        failed = true;
+        reportFailure('initialization', error);
+        cleanup();
+      }
     });
   let cleanup: () => void = () => {
     disposed = true;
     if (locationTimer) clearTimeout(locationTimer);
     // If init is still pending, the .then branch observes disposed and
     // destroys the initialized application without attaching its canvas.
-    if (initialized) app.destroy(true, { children: true, texture: true });
+    if (initialized) app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true, texture: true });
   };
   return { destroy: () => cleanup() };
 }
