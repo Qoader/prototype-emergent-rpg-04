@@ -3,11 +3,12 @@ import { createGoblinSprite, createPlayerSprite } from './playerSprite';
 import { drawCapturedTileAppearance } from './tileIllustration';
 import type { Tile } from './types';
 import type { BattleState } from './battle/types';
-import type { Facing } from './movement';
+import { animationFrame, combatantPose, spriteFootPosition, BATTLE_SCALE, BATTLE_TILE_SIZE } from './battleRendering';
 
 /** Rendering-only tactical view. It intentionally consumes snapshots, never rules. */
 export type BattleRuntimeOptions = {
   onError?: (error: unknown) => void;
+  onReady?: () => void;
   /** Internal seam for deterministic lifecycle tests. */
   applicationFactory?: () => Application;
 };
@@ -25,6 +26,7 @@ export function createBattleRuntime(host: HTMLElement, options: BattleRuntimeOpt
   let latestState: BattleState | undefined;
   let player: ReturnType<typeof createPlayerSprite> | undefined;
   let goblin: ReturnType<typeof createGoblinSprite> | undefined;
+  let readyNotified = false;
 
   const reportError = (error: unknown) => {
     if (errorReported) return;
@@ -43,7 +45,7 @@ export function createBattleRuntime(host: HTMLElement, options: BattleRuntimeOpt
   const draw = (state: BattleState) => {
     if (phase !== 'ready' || !player || !goblin) return;
     try {
-      const cell = 48;
+      const cell = BATTLE_TILE_SIZE;
       stage.position.set(0, 0);
       const drawGrid = (graphics: Graphics) => {
         graphics.clear().rect(0, 0, cell * state.width, cell * state.height).fill({ color: '#000000', alpha: 0 });
@@ -56,11 +58,24 @@ export function createBattleRuntime(host: HTMLElement, options: BattleRuntimeOpt
       if (!background) { const grid = new Graphics(); grid.label = 'battle-grid'; drawGrid(grid); stage.addChildAt(grid, 0); } else drawGrid(background);
       const actor = state.combatants.player;
       const enemy = Object.values(state.combatants).find((combatant) => combatant.side === 'goblin');
-      const pose = state.visual?.player;
-      const enemyPose = enemy ? state.visual?.[enemy.id] : undefined;
-      if (actor) { player.view.position.set(((pose?.x ?? actor.position.col + 0.5) * cell), ((pose?.y ?? actor.position.row + 0.5) * cell)); player.setFrame(pose?.moving ? 'walk' : 'idle', (pose?.facing ?? 'south') as Facing, pose?.moving ? Math.floor((pose?.elapsed ?? 0) * 10) % 4 : 0); }
-      if (enemy) { goblin.view.position.set(((enemyPose?.x ?? enemy.position.col + 0.5) * cell), ((enemyPose?.y ?? enemy.position.row + 0.5) * cell)); goblin.setFrame(enemyPose?.moving ? 'walk' : 'idle', (enemyPose?.facing ?? 'south') as Facing, enemyPose?.moving ? Math.floor((enemyPose?.elapsed ?? 0) * 10) % 4 : 0); }
+      if (actor) {
+        const actorPose = combatantPose(state, actor);
+        player.view.visible = actor.hp > 0;
+        player.view.scale.set(BATTLE_SCALE);
+        const foot = spriteFootPosition(actorPose);
+        player.view.position.set(foot.x, foot.y);
+        player.setFrame(actorPose.moving ? 'walk' : 'idle', actorPose.facing, animationFrame(actorPose));
+      } else player.view.visible = false;
+      if (enemy) {
+        const goblinPose = combatantPose(state, enemy);
+        goblin.view.visible = enemy.hp > 0;
+        goblin.view.scale.set(BATTLE_SCALE);
+        const foot = spriteFootPosition(goblinPose);
+        goblin.view.position.set(foot.x, foot.y);
+        goblin.setFrame(goblinPose.moving ? 'walk' : 'idle', goblinPose.facing, animationFrame(goblinPose));
+      } else goblin.view.visible = false;
       app.render();
+      if (!readyNotified) { readyNotified = true; options.onReady?.(); }
     } catch (error) {
       phase = 'failed'; reportError(error); destroyInitializedApplication();
     }

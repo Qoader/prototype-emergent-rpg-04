@@ -59,6 +59,19 @@ describe('battle runtime asynchronous ownership', () => {
     expect(fake.renderCount).toBe(1);
   });
 
+  it('reports artwork readiness once after the first successful composition', async () => {
+    const gate = deferred();
+    const ready: number[] = [];
+    const fake = fakeApplication(gate.promise);
+    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never, onReady: () => ready.push(fake.renderCount) });
+    runtime.update(createBattle('goblin'));
+    gate.resolve();
+    await runtime.init;
+    runtime.update(createBattle('goblin'));
+    runtime.update(createBattle('goblin'));
+    expect(ready).toEqual([1]);
+  });
+
   it('destroys a ready application exactly once when cleanup repeats', async () => {
     const gate = deferred();
     const fake = fakeApplication(gate.promise);

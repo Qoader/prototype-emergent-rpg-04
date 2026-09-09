@@ -14,6 +14,40 @@ test('loads and accepts a destination input', async ({ page }, testInfo) => {
 });
 
 test.describe('deterministic tactical battle fixture', () => {
+  test('keeps the rendered battlefield visible beneath ready interaction overlays', async ({ page }) => {
+    await page.goto('/?battle-fixture');
+    const board = page.locator('.battle-board');
+    await expect(board).toHaveClass(/ready/, { timeout: 8000 });
+    const canvas = board.locator('.battle-art canvas');
+    await expect(canvas).toBeVisible();
+    const metrics = await board.evaluate((element) => {
+      const boardBox = element.getBoundingClientRect();
+      const art = element.querySelector('.battle-art')!;
+      const artBox = art.getBoundingClientRect();
+      const cell = element.querySelector('.grid button')!;
+      const canvas = art.querySelector('canvas')!;
+      return {
+        boardWidth: boardBox.width,
+        boardHeight: boardBox.height,
+        artWidth: artBox.width,
+        artHeight: artBox.height,
+        cellBackground: getComputedStyle(cell).backgroundColor,
+        gridZ: getComputedStyle(element.querySelector('.grid')!).zIndex,
+        artZ: getComputedStyle(art).zIndex,
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        renderedImageBytes: canvas.toDataURL('image/png').length,
+      };
+    });
+    expect(metrics.artWidth).toBeGreaterThanOrEqual(480);
+    expect(metrics.artHeight).toBeGreaterThanOrEqual(480);
+    expect(metrics.cellBackground).toContain('0.08');
+    expect(Number(metrics.gridZ)).toBeGreaterThan(Number(metrics.artZ));
+    expect(metrics.canvasWidth).toBeGreaterThanOrEqual(480);
+    expect(metrics.canvasHeight).toBeGreaterThanOrEqual(480);
+    expect(metrics.renderedImageBytes).toBeGreaterThan(1000);
+  });
+
   test('renders a reactive battle and supports keyboard movement', async ({ page }) => {
     await page.goto('/?battle-fixture');
     await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
@@ -34,10 +68,12 @@ test.describe('deterministic tactical battle fixture', () => {
     const endTurn = page.getByRole('button', { name: 'End Turn' });
     await expect(page.locator('.stats span').first()).toContainText('AP 1 · MP 3');
     await page.getByRole('gridcell', { name: '5, 4' }).click();
+    await Promise.all([
+      expect(page.getByRole('grid')).toHaveAttribute('aria-busy', 'true'),
+      expect(attack).toBeDisabled(),
+      expect(endTurn).toBeDisabled(),
+    ]);
     await expect(page.locator('.stats span').first()).toContainText('AP 1 · MP 0');
-    await expect(page.getByRole('grid')).toHaveAttribute('aria-busy', 'true');
-    await expect(attack).toBeDisabled();
-    await expect(endTurn).toBeDisabled();
     await page.clock.runFor(600);
     await expect(page.getByRole('grid')).toHaveAttribute('aria-busy', 'false');
     await expect(attack).toBeEnabled();
@@ -48,15 +84,15 @@ test.describe('deterministic tactical battle fixture', () => {
     await page.goto('/?battle-fixture-solo');
     await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
     const board = page.locator('.battle-board');
-    const grid = page.getByRole('grid');
-    const beforeStyle = await grid.getAttribute('style');
+    const boardContent = page.locator('.board-content');
+    const beforeStyle = await boardContent.getAttribute('style');
     const beforeStats = await page.locator('.stats').innerText();
     const beforeLog = await page.locator('.log').innerText();
     const bounds = await board.boundingBox();
     expect(bounds).not.toBeNull();
     const x = bounds!.x + bounds!.width / 2; const y = bounds!.y + bounds!.height / 2;
     await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x - 48, y - 24); await page.mouse.up();
-    await expect(grid).not.toHaveAttribute('style', beforeStyle!);
+    await expect(boardContent).not.toHaveAttribute('style', beforeStyle!);
     expect(await page.locator('.stats').innerText()).toBe(beforeStats);
     expect(await page.locator('.log').innerText()).toBe(beforeLog);
   });

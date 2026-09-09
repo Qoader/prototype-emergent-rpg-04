@@ -1,4 +1,5 @@
 import type { CapturedTileAppearance, Point } from '../types';
+import type { Facing } from '../movement';
 
 export type BattleSide = 'player' | 'goblin';
 export type BattleCombatant = {
@@ -25,7 +26,7 @@ export type BattleState = {
   log: BattleEvent[];
   /** Immutable terrain captured at encounter start (rendering may repeat it). */
   scene?: BattleScene;
-  visual?: Record<string, { x: number; y: number; facing: string; moving: boolean; elapsed?: number }>;
+  visual?: Record<string, { x: number; y: number; facing: Facing; moving: boolean; elapsed?: number }>;
 };
 export type BattleScene = {
   appearance: CapturedTileAppearance;
