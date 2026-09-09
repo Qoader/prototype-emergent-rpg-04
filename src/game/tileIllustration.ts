@@ -1,6 +1,6 @@
 import { Graphics } from 'pixi.js';
 import type { FillInput } from 'pixi.js';
-import type { Country, GroundKind, Tile, TileKind, WorldMap } from './types';
+import type { CapturedTileAppearance, Country, GroundKind, Point, Tile, TileKind, WorldMap } from './types';
 import { TILE_SIZE, tileAt } from './map';
 
 const PATH_WIDTH = 26;
@@ -186,7 +186,7 @@ function drawRoute(graphics: Graphics, tile: Tile, connections: RouteConnections
 
 /** Draw only the ground and route surface for one tile. */
 export function drawTileGround(graphics: Graphics, tile: Tile, map: WorldMap): void {
-  const ox = tile.col * TILE_SIZE; const oy = tile.row * TILE_SIZE; const seed = variation(tile.col, tile.row);
+  const ox = tile.col * TILE_SIZE; const oy = tile.row * TILE_SIZE; const seed = tile.appearanceSeed ?? variation(tile.col, tile.row);
   if (isRoute(tile.kind)) {
     const fallback: GroundKind = tile.kind === 'bridge' ? 'water' : 'grass';
     drawGround(graphics, tile.groundKind ?? fallback, ox, oy, seed, tile.kind === 'bridge');
@@ -210,4 +210,27 @@ export function drawTileOverhang(graphics: Graphics, tile: Tile, map?: WorldMap,
 export function drawTileIllustration(graphics: Graphics, tile: Tile, map: WorldMap): void {
   drawTileGround(graphics, tile, map);
   drawTileOverhang(graphics, tile, map);
+}
+
+/** Draw a captured tile at another coordinate without changing its artwork seed. */
+export function drawTileAppearance(graphics: Graphics, source: Tile, map: WorldMap, destination: Point): void {
+  const tile = { ...source, col: destination.col, row: destination.row, appearanceSeed: source.appearanceSeed ?? variation(source.col, source.row) };
+  drawTileIllustration(graphics, tile, map);
+}
+
+/** Draw an encounter-captured tile without consulting destination neighbors. */
+export function drawCapturedTileAppearance(graphics: Graphics, appearance: CapturedTileAppearance, destination: Point): void {
+  const source = appearance.tile;
+  const tile = { ...source, col: destination.col, row: destination.row, appearanceSeed: appearance.seed };
+  const ox = destination.col * TILE_SIZE; const oy = destination.row * TILE_SIZE;
+  if (isRoute(tile.kind)) {
+    drawGround(graphics, tile.groundKind ?? (tile.kind === 'bridge' ? 'water' : 'grass'), ox, oy, appearance.seed, tile.kind === 'bridge');
+    drawRoute(graphics, tile, appearance.connections, ox, oy, appearance.seed);
+  } else {
+    drawGround(graphics, tile.kind as GroundKind, ox, oy, appearance.seed, true);
+  }
+  if (isOverhangingTerrain(tile.kind)) {
+    if (tile.kind === 'forest' || tile.kind === 'rock' || tile.kind === 'hill') drawOverhang(graphics, tile.kind, ox, oy - TILE_SIZE / 2);
+    else drawFortification(graphics, tile.kind, ox, oy, appearance.fortificationOrientation ?? 'horizontal', appearance.palette ?? neutralCountry);
+  }
 }

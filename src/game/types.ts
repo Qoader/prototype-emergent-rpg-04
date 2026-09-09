@@ -20,7 +20,12 @@ export type Tile = Point & {
   groundKind?: GroundKind;
   countryId?: string;
   settlementId?: string;
+  /** Captured source-coordinate decorative seed for battle scene reuse. */
+  appearanceSeed?: number;
 };
+export type RouteConnections = { north: boolean; east: boolean; south: boolean; west: boolean };
+export type FortificationOrientation = 'horizontal' | 'vertical' | 'corner-northwest' | 'corner-northeast' | 'corner-southwest' | 'corner-southeast';
+export type CapturedTileAppearance = { tile: Tile; connections: RouteConnections; fortificationOrientation?: FortificationOrientation; palette?: Pick<Country, 'color' | 'banner'>; seed: number };
 
 /** Read-only tile capability consumed by navigation and rendering. */
 export type TileReader = {

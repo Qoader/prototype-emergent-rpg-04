@@ -1,4 +1,4 @@
-import type { Point } from '../types';
+import type { CapturedTileAppearance, Point } from '../types';
 
 export type BattleSide = 'player' | 'goblin';
 export type BattleCombatant = {
@@ -23,13 +23,19 @@ export type BattleState = {
   turn: number;
   outcome: BattleOutcome | null;
   log: BattleEvent[];
+  /** Immutable terrain captured at encounter start (rendering may repeat it). */
+  scene?: BattleScene;
+  visual?: Record<string, { x: number; y: number; facing: string; moving: boolean; elapsed?: number }>;
+};
+export type BattleScene = {
+  appearance: CapturedTileAppearance;
 };
 export type BattleCommand =
   | { kind: 'move'; actorId: string; destination: Point }
   | { kind: 'attack'; actorId: string; targetId: string }
   | { kind: 'end-turn'; actorId: string };
 export type BattleEvent =
-  | { kind: 'move'; actorId: string; from: Point; to: Point; cost: number }
+  | { kind: 'move'; actorId: string; from: Point; to: Point; cost: number; path: Point[] }
   | { kind: 'attack'; actorId: string; targetId: string; damage: number; remainingHp: number }
   | { kind: 'turn-start'; actorId: string; turn: number }
   | { kind: 'finished'; outcome: BattleOutcome };

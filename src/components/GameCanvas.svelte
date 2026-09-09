@@ -58,7 +58,7 @@
 </script>
 
 <section class="game" bind:this={host} aria-label="Emergent RPG map">
-  {#if mode !== 'exploration'}<BattleScreen battle={snapshot.battle} dispatch={controller.dispatchBattle} continueFromResult={controller.continueFromResult} />{/if}
+  {#if mode !== 'exploration'}<BattleScreen battle={snapshot.battle} battleBusy={snapshot.battleBusy} dispatch={controller.dispatchBattle} continueFromResult={controller.continueFromResult} />{/if}
   {#if status}
     <p class="status" data-testid="player-status" aria-live="polite">{status}</p>
   {/if}

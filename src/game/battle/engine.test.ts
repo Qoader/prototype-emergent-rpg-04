@@ -1,21 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { applyBattleCommand, createBattle } from './engine';
-import { reachable } from './grid';
 
 describe('battle engine', () => {
   it('moves orthogonally and spends movement points', () => {
     const state = createBattle('goblin-1');
-    const transition = applyBattleCommand(state, { kind: 'move', actorId: 'player', destination: { col: 2, row: 4 } });
+    const transition = applyBattleCommand(state, { kind: 'move', actorId: 'player', destination: { col: 3, row: 4 } });
     expect('error' in transition).toBe(false);
     if ('error' in transition) return;
-    expect(transition.state.combatants.player.position).toEqual({ col: 2, row: 4 });
-    expect(transition.state.combatants.player.mp).toBe(1);
-    expect(reachable(transition.state, 'player').has('5,3')).toBe(false);
+    expect(transition.state.combatants.player.position).toEqual({ col: 3, row: 4 });
+    expect(transition.state.combatants.player.mp).toBe(2);
+    expect(transition.events[0]).toMatchObject({ kind: 'move', path: [{ col: 2, row: 4 }, { col: 3, row: 4 }] });
   });
 
   it('allows a lethal adjacent attack and emits a terminal result', () => {
     const state = createBattle('goblin-1');
-    state.combatants.player.position = { col: 4, row: 3 };
+    state.combatants.player.position = { col: 5, row: 4 };
     state.combatants.player.ap = 1;
     state.combatants['goblin-1']!.hp = 4;
     const transition = applyBattleCommand(state, { kind: 'attack', actorId: 'player', targetId: 'goblin-1' });
