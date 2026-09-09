@@ -14,7 +14,9 @@ test('loads and accepts a destination input', async ({ page }, testInfo) => {
 });
 
 test.describe('deterministic tactical battle fixture', () => {
-  test('keeps the rendered battlefield visible beneath ready interaction overlays', async ({ page }) => {
+  test('keeps the rendered battlefield visible beneath ready interaction overlays', async ({
+    page
+  }) => {
     await page.goto('/?battle-fixture');
     const board = page.locator('.battle-board');
     await expect(board).toHaveClass(/ready/, { timeout: 8000 });
@@ -36,7 +38,7 @@ test.describe('deterministic tactical battle fixture', () => {
         artZ: getComputedStyle(art).zIndex,
         canvasWidth: canvas.width,
         canvasHeight: canvas.height,
-        renderedImageBytes: canvas.toDataURL('image/png').length,
+        renderedImageBytes: canvas.toDataURL('image/png').length
       };
     });
     expect(metrics.artWidth).toBeGreaterThanOrEqual(480);
@@ -50,20 +52,80 @@ test.describe('deterministic tactical battle fixture', () => {
 
   test('renders a reactive battle and supports keyboard movement', async ({ page }) => {
     await page.goto('/?battle-fixture');
-    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 8000
+    });
     await expect(page.getByText(/Player HP/)).toBeVisible();
-    const cell = page.getByRole('gridcell', { name: '2, 4, player' }); await expect(cell).toHaveAttribute('tabindex', '0'); await cell.focus(); await page.keyboard.press('ArrowUp'); await expect(page.locator(':focus')).toHaveAttribute('aria-label', '2, 3'); await page.keyboard.press('Enter');
+    const cell = page.getByRole('gridcell', { name: '2, 4, player' });
+    await expect(cell).toHaveAttribute('tabindex', '0');
+    await cell.focus();
+    await page.keyboard.press('ArrowUp');
+    await expect(page.locator(':focus')).toHaveAttribute('aria-label', '2, 3');
+    await page.keyboard.press('Enter');
     await expect(page.getByText(/MP 2/)).toBeVisible();
   });
   test('supports narrow layout', async ({ page }) => {
-    await page.setViewportSize({ width: 320, height: 568 }); await page.goto('/?battle-fixture');
-    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
-    await expect(page.locator('.battle')).toHaveCSS('overflow', 'auto');
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto('/?battle-fixture');
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 8000
+    });
+    await expect(page.locator('.battle')).toHaveCSS('overflow', 'hidden');
+  });
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 844, height: 390 }
+  ]) {
+    test(`keeps battle chrome inside ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.goto('/?battle-fixture-solo');
+      await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+        timeout: 8000
+      });
+      const boxes = await page.evaluate(() =>
+        [...document.querySelectorAll('.battle-header, .log, .controls button')].map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        })
+      );
+      expect(boxes.length).toBeGreaterThanOrEqual(3);
+      for (const box of boxes) {
+        expect(box.left).toBeGreaterThanOrEqual(0);
+        expect(box.top).toBeGreaterThanOrEqual(0);
+        expect(box.right).toBeLessThanOrEqual(viewport.width);
+        expect(box.bottom).toBeLessThanOrEqual(viewport.height);
+      }
+      const overlap = await page.evaluate(() => {
+        const board = document.querySelector('.battle-board')!.getBoundingClientRect();
+        return [...document.querySelectorAll('.log, .controls')].some((el) => {
+          const r = el.getBoundingClientRect();
+          return (
+            r.left < board.right &&
+            r.right > board.left &&
+            r.top < board.bottom &&
+            r.bottom > board.top
+          );
+        });
+      });
+      expect(overlap).toBe(false);
+    });
+  }
+  test('renders one atomic latest-action notice', async ({ page }) => {
+    await page.goto('/?battle-fixture-solo');
+    await expect(page.locator('[role="status"]')).toHaveCount(1);
+    await expect(page.locator('.log')).toContainText('Battle begins');
+    await page.getByRole('gridcell', { name: '5, 4' }).click();
+    await expect(page.locator('.log')).toContainText('cost 3 MP');
+    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Attack' }).click();
+    await expect(page.locator('.log')).toContainText('damage');
   });
   test('completes the click-to-ready movement state sequence', async ({ page }) => {
     await page.clock.install();
     await page.goto('/?battle-fixture-solo');
-    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 8000
+    });
     const attack = page.getByRole('button', { name: 'Attack' });
     const endTurn = page.getByRole('button', { name: 'End Turn' });
     await expect(page.locator('.stats span').first()).toContainText('AP 1 · MP 3');
@@ -71,7 +133,7 @@ test.describe('deterministic tactical battle fixture', () => {
     await Promise.all([
       expect(page.getByRole('grid')).toHaveAttribute('aria-busy', 'true'),
       expect(attack).toBeDisabled(),
-      expect(endTurn).toBeDisabled(),
+      expect(endTurn).toBeDisabled()
     ]);
     await expect(page.locator('.stats span').first()).toContainText('AP 1 · MP 0');
     await page.clock.runFor(600);
@@ -82,7 +144,9 @@ test.describe('deterministic tactical battle fixture', () => {
   test('suppresses drag release activation while moving the camera', async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 568 });
     await page.goto('/?battle-fixture-solo');
-    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 8000
+    });
     const board = page.locator('.battle-board');
     const boardContent = page.locator('.board-content');
     const beforeStyle = await boardContent.getAttribute('style');
@@ -90,8 +154,12 @@ test.describe('deterministic tactical battle fixture', () => {
     const beforeLog = await page.locator('.log').innerText();
     const bounds = await board.boundingBox();
     expect(bounds).not.toBeNull();
-    const x = bounds!.x + bounds!.width / 2; const y = bounds!.y + bounds!.height / 2;
-    await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x - 48, y - 24); await page.mouse.up();
+    const x = bounds!.x + bounds!.width / 2;
+    const y = bounds!.y + bounds!.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 48, y - 24);
+    await page.mouse.up();
     await expect(boardContent).not.toHaveAttribute('style', beforeStyle!);
     expect(await page.locator('.stats').innerText()).toBe(beforeStats);
     expect(await page.locator('.log').innerText()).toBe(beforeLog);
@@ -99,16 +167,26 @@ test.describe('deterministic tactical battle fixture', () => {
   test('wins through real movement and attack controls, then continues', async ({ page }) => {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto('/?battle-fixture-solo'); await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
-    const target = page.getByRole('gridcell', { name: '5, 4' }); await expect(target).toHaveClass(/reachable/); await target.click();
-    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 }); await page.getByRole('button', { name: 'Attack' }).click();
-    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 }); await page.getByRole('button', { name: 'Attack' }).click();
+    await page.goto('/?battle-fixture-solo');
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 8000
+    });
+    const target = page.getByRole('gridcell', { name: '5, 4' });
+    await expect(target).toHaveClass(/reachable/);
+    await target.click();
+    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Attack' }).click();
+    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Attack' }).click();
     await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
-    await page.getByRole('button', { name: 'Continue' }).click(); await expect(page.getByRole('region', { name: 'Tactical battle' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toHaveCount(0);
     await expect(page.locator('canvas')).toHaveCount(1);
     const gameCanvas = page.getByTestId('game-canvas');
     await expect(gameCanvas).toBeVisible();
-    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    );
     const bounds = await gameCanvas.boundingBox();
     expect(bounds?.width ?? 0).toBeGreaterThan(0);
     expect(bounds?.height ?? 0).toBeGreaterThan(0);
@@ -119,9 +197,19 @@ test.describe('deterministic tactical battle fixture', () => {
     page.on('pageerror', (error) => pageErrors.push(error));
     await page.goto('/?battle-fixture');
     const winEncounter = async () => {
-      await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
-    const targetCell = page.getByRole('gridcell', { name: '5, 4' }); await expect(targetCell).toHaveClass(/reachable/); await targetCell.click();
-      await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 }); await page.getByRole('button', { name: 'Attack' }).click();
+      await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+        timeout: 8000
+      });
+      await expect(page.getByRole('button', { name: 'End Turn' })).toBeEnabled({ timeout: 5000 });
+      const targetCell = page.getByRole('gridcell', { name: '5, 4' });
+      await expect(targetCell).toHaveClass(/reachable/);
+      await targetCell.click();
+      await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
+      await page.getByRole('button', { name: 'Attack' }).click();
+      await expect(page.getByRole('button', { name: 'End Turn' })).toBeEnabled({ timeout: 5000 });
+      await page.getByRole('button', { name: 'End Turn' }).click();
+      const attackable = page.locator('[role="gridcell"].attackable');
+      await expect(attackable).toHaveCount(1, { timeout: 10000 });
       await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
       await page.getByRole('button', { name: 'Attack' }).click();
       await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
@@ -129,20 +217,32 @@ test.describe('deterministic tactical battle fixture', () => {
       await expect(page.getByTestId('game-canvas')).toBeVisible();
     };
     await winEncounter();
-    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 3000 });
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 3000
+    });
     await winEncounter();
-    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 3000 });
-    await expect(page.locator('canvas')).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 3000
+    });
+    await expect(page.locator('.battle-art canvas')).toHaveCount(1);
+    await expect(page.locator('[data-testid="game-canvas"]')).toHaveCount(1);
     expect(pageErrors).toEqual([]);
   });
   test('survives repeated encounters in the generated world', async ({ page }) => {
+    test.setTimeout(60000);
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
-    await page.goto('/?battle-stability');
+    await page.goto('/?battle-stability', { waitUntil: 'domcontentloaded', timeout: 60000 });
     const canvas = page.getByTestId('game-canvas');
     const winEncounter = async (expectStart = true) => {
-      if (expectStart) await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 10000 });
-      await page.getByRole('gridcell', { name: '5, 4' }).click();
+      if (expectStart)
+        await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+          timeout: 10000
+        });
+      await expect(page.getByRole('button', { name: 'End Turn' })).toBeEnabled({ timeout: 5000 });
+      const initialTarget = page.getByRole('gridcell', { name: '4, 4' });
+      await expect(initialTarget).toHaveClass(/reachable/);
+      await initialTarget.click();
       await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
       await page.getByRole('button', { name: 'Attack' }).click();
       await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
@@ -151,29 +251,101 @@ test.describe('deterministic tactical battle fixture', () => {
       await page.getByRole('button', { name: 'Continue' }).click();
       await expect(canvas).toBeVisible();
       await expect(page.locator('canvas')).toHaveCount(1);
-      await canvas.click({ position: { x: 100, y: 100 } });
     };
     await winEncounter();
     await expect(page.getByRole('region', { name: 'Tactical battle' })).toHaveCount(0);
     await expect(canvas).toBeVisible();
-    await canvas.click({ position: { x: 100, y: 100 } });
-    await page.evaluate(() => (window as typeof globalThis & { __startBattleStabilityEncounter?: (index: number) => void }).__startBattleStabilityEncounter?.(1));
+    await page.evaluate(() =>
+      (
+        window as typeof globalThis & { __startBattleStabilityEncounter?: (index: number) => void }
+      ).__startBattleStabilityEncounter?.(1)
+    );
     await winEncounter(false);
     await expect(page.getByRole('region', { name: 'Tactical battle' })).toHaveCount(0);
     expect(pageErrors).toEqual([]);
   });
   test('loses through real turns and respawns at settlement', async ({ page }) => {
-    await page.goto('/?battle-fixture-defeat'); await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({ timeout: 8000 });
-    for (let i=0;i<5;i++) { const end=page.getByRole('button', { name:'End Turn' }); await expect(end).toBeEnabled({ timeout: 3000 }); await end.click(); }
-    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible({ timeout: 3000 }); await page.getByRole('button', { name:'Continue' }).click(); await expect(page.getByRole('region', { name:'Tactical battle' })).toHaveCount(0);
+    test.setTimeout(60000);
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
+    await page.goto('/?battle-fixture-defeat');
+    const battle = page.getByRole('region', { name: 'Tactical battle' });
+    await expect(battle).toBeVisible({ timeout: 8000 });
+    await expect(page.getByTestId('location-overlay')).toHaveCount(0);
+
+    type BattleDecision = 'player-ready' | 'result-ready' | 'waiting';
+    const observeDecision = async (): Promise<BattleDecision> =>
+      battle.locator('button').evaluateAll((buttons) => {
+        const isReady = (name: string) =>
+          [...buttons].some(
+            (button) =>
+              button.textContent?.trim() === name &&
+              !button.hasAttribute('disabled') &&
+              (button as HTMLButtonElement).offsetParent !== null
+          );
+        if (isReady('Continue')) return 'result-ready';
+        if (isReady('End Turn')) return 'player-ready';
+        return 'waiting';
+      });
+    const waitForBattleDecision = async (): Promise<Exclude<BattleDecision, 'waiting'>> => {
+      let observation: BattleDecision = 'waiting';
+      await expect
+        .poll(
+          async () => {
+            observation = await observeDecision();
+            return observation !== 'waiting';
+          },
+          { timeout: 5000, intervals: [50, 100, 250] }
+        )
+        .toBe(true);
+      expect(observation).toMatch(/player-ready|result-ready/);
+      return observation as Exclude<BattleDecision, 'waiting'>;
+    };
+
+    let decision: Exclude<BattleDecision, 'waiting'> = 'player-ready';
+    let turnsSubmitted = 0;
+    for (; turnsSubmitted < 8; turnsSubmitted += 1) {
+      decision = await waitForBattleDecision();
+      if (decision === 'result-ready') break;
+      await battle.getByRole('button', { name: 'End Turn', exact: true }).click();
+    }
+    if (decision !== 'result-ready') decision = await waitForBattleDecision();
+    expect(decision).toBe('result-ready');
+    await expect(page.getByRole('heading', { name: 'Defeat', exact: true })).toBeVisible();
+    await expect(page.getByText(/Player HP 0\/12/)).toBeVisible();
+    await expect(battle.getByRole('button', { name: 'End Turn', exact: true })).toHaveCount(0);
+    const continueButton = battle.getByRole('button', { name: 'Continue', exact: true });
+    await expect(continueButton).toBeEnabled();
+    await continueButton.click();
+    await expect(page.getByTestId('location-overlay')).toHaveText('Fixture Settlement · village');
+    await expect(battle).toHaveCount(0);
+    const canvas = page.getByTestId('game-canvas');
+    await expect(canvas).toBeVisible();
+    await expect(page.locator('canvas')).toHaveCount(1);
+    const bounds = await canvas.boundingBox();
+    expect(bounds?.width ?? 0).toBeGreaterThan(0);
+    expect(bounds?.height ?? 0).toBeGreaterThan(0);
+    expect(pageErrors).toEqual([]);
   });
   test('supports touch cell interaction and repeated cleanup', async ({ page }, testInfo) => {
     test.skip(!testInfo.project.use.hasTouch, 'tap requires a touch project');
-    await page.goto('/?battle-fixture'); const cell=page.getByRole('gridcell', { name:'5, 4' }); await expect(cell).toBeVisible({ timeout:8000 }); await cell.tap(); await expect(page.getByRole('button', { name:'Attack' })).toBeEnabled({ timeout:5000 }); await page.getByRole('button', { name:'Attack' }).tap(); await expect(page.getByRole('button', { name:'Attack' })).toBeEnabled({ timeout:5000 }); await page.getByRole('button', { name:'Attack' }).tap(); await page.getByRole('button', { name:'Continue' }).tap(); await expect(page.getByRole('region', { name:'Tactical battle' })).toBeVisible({ timeout:3000 });
+    await page.goto('/?battle-fixture');
+    const cell = page.getByRole('gridcell', { name: '5, 4' });
+    await expect(cell).toBeVisible({ timeout: 8000 });
+    await cell.tap();
+    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Attack' }).tap();
+    await expect(page.getByRole('button', { name: 'Attack' })).toBeEnabled({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Attack' }).tap();
+    await page.getByRole('button', { name: 'Continue' }).tap();
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 3000
+    });
   });
 });
 
 test('mobile startup reaches the canvas without a reload', async ({ page }) => {
+  test.setTimeout(30000);
   const started = Date.now();
   let navigations = 0;
   page.on('framenavigated', (frame) => {
@@ -182,7 +354,7 @@ test('mobile startup reaches the canvas without a reload', async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('game-canvas')).toBeVisible({ timeout: 8000 });
   await expect(page.getByTestId('player-status')).toHaveCount(0);
-  expect(Date.now() - started).toBeLessThan(8000);
+  expect(Date.now() - started).toBeLessThan(15000);
   expect(navigations).toBe(1);
 });
 

@@ -7,7 +7,12 @@ import { cameraForPlayer } from './camera';
 import { locationAt } from './location';
 import { createChunkResourceRegistry } from './chunkResources';
 import { acceptsPointer, tilePointFromPointer } from './input';
-import { createAdventurerSprite, createGoblinSprite, createPlayerSprite, type PlayerAnimation } from './playerSprite';
+import {
+  createAdventurerSprite,
+  createGoblinSprite,
+  createPlayerSprite,
+  type PlayerAnimation
+} from './playerSprite';
 import {
   drawTileGround,
   drawTileOverhang,
@@ -25,7 +30,11 @@ export type GameRuntimeOptions = {
   onError?: (failure: RuntimeFailure) => void;
   applicationFactory?: () => Application;
 };
-export type RuntimeFailure = { source: 'map'; phase: 'initialization' | 'frame' | 'cleanup' | 'context-lost'; cause: unknown };
+export type RuntimeFailure = {
+  source: 'map';
+  phase: 'initialization' | 'frame' | 'cleanup' | 'context-lost';
+  cause: unknown;
+};
 export type GameRuntime = { destroy: () => void };
 
 export function createGameRuntime({
@@ -45,7 +54,11 @@ export function createGameRuntime({
   const reportFailure = (phase: RuntimeFailure['phase'], cause: unknown) => {
     if (errorReported) return;
     errorReported = true;
-    try { onError?.({ source: 'map', phase, cause }); } catch { /* diagnostics must not break cleanup */ }
+    try {
+      onError?.({ source: 'map', phase, cause });
+    } catch {
+      /* diagnostics must not break cleanup */
+    }
   };
   let initialized = false;
   const world = new Container();
@@ -54,8 +67,14 @@ export function createGameRuntime({
   const depthLayer = new Container();
   depthLayer.sortableChildren = true;
   const player = createPlayerSprite();
-  const adventurerViews = new Map<string, { sprite: ReturnType<typeof createAdventurerSprite>; time: number; state: string }>();
-  const goblinViews = new Map<string, { sprite: ReturnType<typeof createGoblinSprite>; time: number; state: string }>();
+  const adventurerViews = new Map<
+    string,
+    { sprite: ReturnType<typeof createAdventurerSprite>; time: number; state: string }
+  >();
+  const goblinViews = new Map<
+    string,
+    { sprite: ReturnType<typeof createGoblinSprite>; time: number; state: string }
+  >();
   let camera = { x: 0, y: 0 };
   let canvas: HTMLCanvasElement;
   let locationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -71,7 +90,10 @@ export function createGameRuntime({
     })
     .then(() => {
       if (disposed) {
-        app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true, texture: true });
+        app.destroy(
+          { removeView: true, releaseGlobalResources: false },
+          { children: true, texture: true }
+        );
         return;
       }
       initialized = true;
@@ -145,10 +167,23 @@ export function createGameRuntime({
           depth.push(landmark);
         }
         for (const nest of map.goblinNests ?? []) {
-          if (Math.floor(nest.col / CHUNK_SIZE) !== chunkCol || Math.floor(nest.row / CHUNK_SIZE) !== chunkRow) continue;
-          const x = nest.col * TILE_SIZE + 24; const y = nest.row * TILE_SIZE + 24;
-          const camp = new Graphics().ellipse(x, y + 8, 18, 7).fill({ color: '#3d2d24', alpha: 0.55 }).poly([x - 18, y + 7, x, y - 12, x + 18, y + 7]).fill('#79533b').poly([x - 14, y + 4, x, y - 7, x + 14, y + 4]).fill('#a6764e');
-          camp.zIndex = y; depthLayer.addChild(camp); depth.push(camp);
+          if (
+            Math.floor(nest.col / CHUNK_SIZE) !== chunkCol ||
+            Math.floor(nest.row / CHUNK_SIZE) !== chunkRow
+          )
+            continue;
+          const x = nest.col * TILE_SIZE + 24;
+          const y = nest.row * TILE_SIZE + 24;
+          const camp = new Graphics()
+            .ellipse(x, y + 8, 18, 7)
+            .fill({ color: '#3d2d24', alpha: 0.55 })
+            .poly([x - 18, y + 7, x, y - 12, x + 18, y + 7])
+            .fill('#79533b')
+            .poly([x - 14, y + 4, x, y - 7, x + 14, y + 4])
+            .fill('#a6764e');
+          camp.zIndex = y;
+          depthLayer.addChild(camp);
+          depth.push(camp);
         }
         chunkResources.set(id, { ground, depth });
       };
@@ -159,7 +194,7 @@ export function createGameRuntime({
           height: host.clientHeight
         });
         const windowId = `${range.left},${range.top},${range.right},${range.bottom}`;
-      const needed = new Set<string>();
+        const needed = new Set<string>();
         for (let y = range.top; y <= range.bottom; y++)
           for (let x = range.left; x <= range.right; x++) {
             needed.add(`${x},${y}`);
@@ -228,10 +263,12 @@ export function createGameRuntime({
           const resource = adventurerViews.get(npc.id);
           if (!resource) continue;
           const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
-          resource.time = resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0;
+          resource.time =
+            resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0;
           resource.state = state;
           const npcAnimation: PlayerAnimation = npc.walking ? 'walk' : 'idle';
-          const frameIndex = Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
+          const frameIndex =
+            Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
           resource.sprite.setFrame(npcAnimation, npc.facing, frameIndex);
           resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
           resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
@@ -244,12 +281,18 @@ export function createGameRuntime({
             goblinViews.delete(id);
           }
         for (const npc of goblins) {
-          const resource = goblinViews.get(npc.id); if (!resource) continue;
+          const resource = goblinViews.get(npc.id);
+          if (!resource) continue;
           const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
-          resource.time = resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0; resource.state = state;
+          resource.time =
+            resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0;
+          resource.state = state;
           const animation: PlayerAnimation = npc.walking ? 'walk' : 'idle';
-          const frameIndex = Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
-          resource.sprite.setFrame(animation, npc.facing, frameIndex); resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE); resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
+          const frameIndex =
+            Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
+          resource.sprite.setFrame(animation, npc.facing, frameIndex);
+          resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
+          resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
         }
         marker.clear();
         if (movement.destination)
@@ -273,13 +316,17 @@ export function createGameRuntime({
       };
       const tick = (ticker: { deltaMS: number }) => {
         if (disposed || failed || document.hidden) return;
-        if (wasHidden) { wasHidden = false; return; }
+        if (wasHidden) {
+          wasHidden = false;
+          return;
+        }
         try {
           const delta = Math.min(ticker.deltaMS / 1000, 0.1);
           controller.tick(delta);
           const paused = controller.mode !== 'exploration';
-          if (!paused) updateLocation();
-          draw(paused ? 0 : delta);
+          if (paused) return;
+          updateLocation();
+          draw(delta);
           app.render();
         } catch (error) {
           failed = true;
@@ -288,8 +335,13 @@ export function createGameRuntime({
         }
       };
       let wasHidden = false;
-      const visibility = () => { if (document.hidden) wasHidden = true; };
-      try { draw(); app.render(); } catch (error) {
+      const visibility = () => {
+        if (document.hidden) wasHidden = true;
+      };
+      try {
+        draw();
+        app.render();
+      } catch (error) {
         failed = true;
         reportFailure('frame', error);
         cleanup();
@@ -331,9 +383,14 @@ export function createGameRuntime({
         canvas.removeEventListener('webglcontextlost', contextLost);
         if (locationTimer) clearTimeout(locationTimer);
         chunkResources.destroyAll();
-        for (const resource of [...adventurerViews.values(), ...goblinViews.values()]) resource.sprite.view.destroy({ children: true });
-        adventurerViews.clear(); goblinViews.clear();
-        app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true, texture: true });
+        for (const resource of [...adventurerViews.values(), ...goblinViews.values()])
+          resource.sprite.view.destroy({ children: true });
+        adventurerViews.clear();
+        goblinViews.clear();
+        app.destroy(
+          { removeView: true, releaseGlobalResources: false },
+          { children: true, texture: true }
+        );
         tileStore.clear();
       };
       // The component cleanup can happen after initialization; retain the
@@ -352,7 +409,11 @@ export function createGameRuntime({
     if (locationTimer) clearTimeout(locationTimer);
     // If init is still pending, the .then branch observes disposed and
     // destroys the initialized application without attaching its canvas.
-    if (initialized) app.destroy({ removeView: true, releaseGlobalResources: false }, { children: true, texture: true });
+    if (initialized)
+      app.destroy(
+        { removeView: true, releaseGlobalResources: false },
+        { children: true, texture: true }
+      );
   };
   return { destroy: () => cleanup() };
 }
