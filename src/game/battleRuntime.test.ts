@@ -11,23 +11,67 @@ const deferred = (): Deferred => {
   return { promise, resolve, reject };
 };
 
-function fakeApplication(initialization: Promise<void>, renderFailure = false) {
+function fakeApplication(
+  initialization: Promise<void>,
+  renderFailure = false,
+  destroyFailure = false
+) {
   let destroyCount = 0;
   let renderCount = 0;
+  let destroyArgs: unknown[] = [];
+  let destroyed = false;
+  const canvas = { remove: () => undefined };
   const app = {
     stage: new Container(),
-    canvas: {},
+    get canvas() {
+      if (destroyed) throw new Error('canvas accessed after destroy');
+      return canvas;
+    },
     init: () => initialization,
     render: () => { renderCount += 1; if (renderFailure) throw new Error('render failed'); },
-    destroy: () => { destroyCount += 1; }
+    destroy: (...args: unknown[]) => {
+      destroyCount += 1;
+      destroyArgs = args;
+      destroyed = true;
+      if (destroyFailure) throw new Error('destroy failed');
+    }
   };
-  return { app, get destroyCount() { return destroyCount; }, get renderCount() { return renderCount; } };
+  return {
+    app,
+    canvas,
+    get destroyCount() { return destroyCount; },
+    get renderCount() { return renderCount; },
+    get destroyArgs() { return destroyArgs; }
+  };
 }
 
 function testHost() {
   let appendCount = 0;
-  const value = { clientWidth: 320, clientHeight: 240, appendChild: () => { appendCount += 1; } } as unknown as HTMLElement;
-  return { value, get appendCount() { return appendCount; } };
+  let removeCount = 0;
+  const children: Array<{ parentNode?: unknown; remove: () => void }> = [];
+  const value = {
+    clientWidth: 320,
+    clientHeight: 240,
+    appendChild: (child: { parentNode?: unknown; remove: () => void }) => {
+      appendCount += 1;
+      child.parentNode = value;
+      child.remove = () => {
+        const index = children.indexOf(child);
+        if (index >= 0) children.splice(index, 1);
+        child.parentNode = null;
+        removeCount += 1;
+      };
+      children.push(child);
+      return child;
+    },
+    children
+  } as unknown as HTMLElement;
+  return {
+    value,
+    children,
+    get appendCount() { return appendCount; },
+    get removeCount() { return removeCount; }
+  };
 }
 
 describe('battle runtime asynchronous ownership', () => {
@@ -70,6 +114,7 @@ describe('battle runtime asynchronous ownership', () => {
     runtime.update(createBattle('goblin'));
     runtime.update(createBattle('goblin'));
     expect(ready).toEqual([1]);
+    runtime.destroy();
   });
 
   it('destroys a ready application exactly once when cleanup repeats', async () => {
@@ -82,6 +127,62 @@ describe('battle runtime asynchronous ownership', () => {
     expect(target.appendCount).toBe(1);
     runtime.destroy(); runtime.destroy(); runtime.destroy();
     expect(fake.destroyCount).toBe(1);
+    expect(fake.destroyArgs).toEqual([
+      { removeView: true, releaseGlobalResources: false },
+      { children: true }
+    ]);
+    expect(target.removeCount).toBe(1);
+    expect(target.children).toHaveLength(0);
+  });
+
+  it('removes only its owned canvas and preserves unrelated host canvases', async () => {
+    const gate = deferred();
+    const fake = fakeApplication(gate.promise);
+    const target = testHost();
+    const unrelated = { remove: () => undefined };
+    target.value.appendChild(unrelated as never);
+    const runtime = createBattleRuntime(target.value, { applicationFactory: () => fake.app as never });
+    gate.resolve();
+    await runtime.init;
+    runtime.destroy();
+    expect(target.children).toEqual([unrelated]);
+    expect(fake.destroyCount).toBe(1);
+  });
+
+  it('does not let a disposed late initializer remove a replacement runtime canvas', async () => {
+    const oldGate = deferred();
+    const newGate = deferred();
+    const oldFake = fakeApplication(oldGate.promise);
+    const newFake = fakeApplication(newGate.promise);
+    const target = testHost();
+    const oldRuntime = createBattleRuntime(target.value, { applicationFactory: () => oldFake.app as never });
+    await Promise.resolve();
+    oldRuntime.destroy();
+    const newRuntime = createBattleRuntime(target.value, { applicationFactory: () => newFake.app as never });
+    newGate.resolve();
+    await newRuntime.init;
+    oldGate.resolve();
+    await oldRuntime.init;
+    expect(target.children).toHaveLength(1);
+    expect(newFake.destroyCount).toBe(0);
+    newRuntime.destroy();
+  });
+
+  it('uses the saved canvas when application destruction fails', async () => {
+    const gate = deferred();
+    const errors: unknown[] = [];
+    const fake = fakeApplication(gate.promise, false, true);
+    const target = testHost();
+    const runtime = createBattleRuntime(target.value, {
+      applicationFactory: () => fake.app as never,
+      onError: (error) => errors.push(error)
+    });
+    gate.resolve();
+    await runtime.init;
+    expect(() => runtime.destroy()).not.toThrow();
+    expect(target.children).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe('destroy failed');
   });
 
   it('handles initialization rejection as a nonfatal, observed error', async () => {
@@ -113,13 +214,18 @@ describe('battle runtime asynchronous ownership', () => {
     const gate = deferred();
     const errors: unknown[] = [];
     const fake = fakeApplication(gate.promise, true);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never, onError: (value) => errors.push(value) });
+    const target = testHost();
+    const runtime = createBattleRuntime(target.value, {
+      applicationFactory: () => fake.app as never,
+      onError: (error) => { errors.push(error); throw new Error('diagnostics failed'); }
+    });
     gate.resolve();
     await runtime.init;
     runtime.update(createBattle('goblin'));
-    expect(errors).toHaveLength(1);
     expect(fake.destroyCount).toBe(1);
+    expect(target.children).toHaveLength(0);
     expect(() => { runtime.update(createBattle('goblin')); runtime.destroy(); runtime.destroy(); }).not.toThrow();
     expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe('render failed');
   });
 });

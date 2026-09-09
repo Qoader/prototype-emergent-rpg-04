@@ -39,6 +39,7 @@ export function createBattleRuntime(
   let latestState: BattleState | undefined;
   let player: ReturnType<typeof createPlayerSprite> | undefined;
   let goblin: ReturnType<typeof createGoblinSprite> | undefined;
+  let ownedCanvas: HTMLCanvasElement | undefined;
   let readyNotified = false;
 
   const reportError = (error: unknown) => {
@@ -62,7 +63,13 @@ export function createBattleRuntime(
     }
     player = undefined;
     goblin = undefined;
-    host.querySelectorAll('canvas').forEach((canvas) => canvas.remove());
+    const canvas = ownedCanvas;
+    ownedCanvas = undefined;
+    try {
+      canvas?.remove();
+    } catch (error) {
+      reportError(error);
+    }
   };
   const draw = (state: BattleState) => {
     if (phase !== 'ready' || !player || !goblin) return;
@@ -137,11 +144,15 @@ export function createBattleRuntime(
     )
     .then(() => {
       initialized = true;
-      if (phase === 'disposed') {
-        destroyInitializedApplication();
-        return;
-      }
       try {
+        // Save the view before destruction can clear the renderer. Cleanup
+        // must only remove the canvas created by this runtime, since the host
+        // may contain another renderer at the same time.
+        ownedCanvas = app.canvas;
+        if (phase === 'disposed') {
+          destroyInitializedApplication();
+          return;
+        }
         player = createPlayerSprite();
         goblin = createGoblinSprite();
         app.stage.addChild(stage);
@@ -173,7 +184,6 @@ export function createBattleRuntime(
     phase = 'disposed';
     latestState = undefined;
     if (initialized) destroyInitializedApplication();
-    host.querySelectorAll('canvas').forEach((canvas) => canvas.remove());
   };
   return { init, update, destroy };
 }

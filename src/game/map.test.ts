@@ -1,7 +1,161 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, generateRoutePoints, GENERATOR_VERSION, tileAt, TILE_SIZE } from './map';
 import { findPath } from './pathfinding';
-import type { Tile } from './types';
+import type { Point, Settlement, Tile, WorldMap } from './types';
+
+type HousingSample = {
+  bounds: Settlement['bounds'];
+  routes: Point[];
+  houses: Point[];
+};
+
+type HousingProjection = {
+  seed: number;
+  settlements: Array<{ id: string; houses: Point[] }>;
+};
+
+const pointKey = ({ col, row }: Point) => `${col},${row}`;
+
+const collectHousingSample = (map: WorldMap, settlement: Settlement): HousingSample => {
+  const routes: Point[] = [];
+  const houses: Point[] = [];
+  for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row += 1) {
+    for (let col = settlement.bounds.left; col <= settlement.bounds.right; col += 1) {
+      const tile = tileAt(map, { col, row });
+      if (tile?.kind === 'road' || tile?.kind === 'bridge' || tile?.kind === 'gate') routes.push({ col, row });
+      if (tile?.kind === 'house') houses.push({ col, row });
+    }
+  }
+  return { bounds: settlement.bounds, routes, houses };
+};
+
+const nearestRouteDistances = ({ bounds, routes, houses }: HousingSample): number[] => {
+  const width = bounds.right - bounds.left + 1;
+  const height = bounds.bottom - bounds.top + 1;
+  const distances = new Int32Array(width * height);
+  distances.fill(-1);
+  const queue = new Int32Array(width * height);
+  let head = 0;
+  let tail = 0;
+  const indexOf = (col: number, row: number) => (row - bounds.top) * width + col - bounds.left;
+  for (const route of routes) {
+    const index = indexOf(route.col, route.row);
+    if (distances[index] !== -1) continue;
+    distances[index] = 0;
+    queue[tail] = index;
+    tail += 1;
+  }
+  while (head < tail) {
+    const index = queue[head]!;
+    head += 1;
+    const row = Math.floor(index / width);
+    const col = index % width;
+    const distance = distances[index]! + 1;
+    if (col > 0) {
+      const neighbor = index - 1;
+      if (distances[neighbor] === -1) { distances[neighbor] = distance; queue[tail] = neighbor; tail += 1; }
+    }
+    if (col + 1 < width) {
+      const neighbor = index + 1;
+      if (distances[neighbor] === -1) { distances[neighbor] = distance; queue[tail] = neighbor; tail += 1; }
+    }
+    if (row > 0) {
+      const neighbor = index - width;
+      if (distances[neighbor] === -1) { distances[neighbor] = distance; queue[tail] = neighbor; tail += 1; }
+    }
+    if (row + 1 < height) {
+      const neighbor = index + width;
+      if (distances[neighbor] === -1) { distances[neighbor] = distance; queue[tail] = neighbor; tail += 1; }
+    }
+  }
+  return houses.map((house) => distances[indexOf(house.col, house.row)]!);
+};
+
+const bruteForceRouteDistances = (routes: Point[], houses: Point[]) => houses.map((house) => (
+  routes.length === 0 ? -1 : Math.min(...routes.map((route) => Math.abs(route.col - house.col) + Math.abs(route.row - house.row)))
+));
+
+const countAdjacentHouses = (houses: Point[]) => {
+  const houseKeys = new Set(houses.map(pointKey));
+  return houses.reduce((count, house) => count + ([
+    { col: house.col - 1, row: house.row },
+    { col: house.col + 1, row: house.row },
+    { col: house.col, row: house.row - 1 },
+    { col: house.col, row: house.row + 1 }
+  ].some((neighbor) => houseKeys.has(pointKey(neighbor))) ? 1 : 0), 0);
+};
+
+const housingProjection = (seed: number, samples: Array<{ id: string; houses: Point[] }>): HousingProjection => ({
+  seed,
+  settlements: samples
+    .map(({ id, houses }) => ({ id, houses: houses.slice().sort((a, b) => a.row - b.row || a.col - b.col) }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+});
+
+describe('housing measurement helpers', () => {
+  it('computes exact nearest-route Manhattan distances on offset rectangular bounds', () => {
+    const bounds = { left: 10, top: 20, right: 12, bottom: 21 };
+    const houses = [{ col: 10, row: 20 }, { col: 12, row: 21 }, { col: 11, row: 20 }];
+    const routes = [{ col: 12, row: 20 }];
+    expect(nearestRouteDistances({ bounds, routes, houses })).toEqual(bruteForceRouteDistances(routes, houses));
+    expect(nearestRouteDistances({ bounds, routes: [], houses: [houses[0]!] })).toEqual([-1]);
+  });
+
+  it('chooses the nearest source independently for each house', () => {
+    const bounds = { left: 0, top: 0, right: 5, bottom: 4 };
+    const routes = [{ col: 0, row: 0 }, { col: 5, row: 4 }];
+    const houses = [{ col: 1, row: 0 }, { col: 4, row: 4 }, { col: 2, row: 2 }];
+    expect(nearestRouteDistances({ bounds, routes, houses })).toEqual(bruteForceRouteDistances(routes, houses));
+  });
+
+  it('keeps blocked intermediate cells in the geometric distance calculation', () => {
+    const bounds = { left: 0, top: 0, right: 4, bottom: 0 };
+    const routes = [{ col: 0, row: 0 }];
+    const houses = [{ col: 4, row: 0 }];
+    const blocked = new Set(['1,0', '2,0', '3,0']);
+    expect(blocked.size).toBe(3);
+    // BFS intentionally traverses every cell: this metric is Manhattan distance,
+    // so unwalkable terrain between a route and house does not change the result.
+    expect(nearestRouteDistances({ bounds, routes, houses })).toEqual([4]);
+    expect(nearestRouteDistances({ bounds, routes, houses })).toEqual(bruteForceRouteDistances(routes, houses));
+  });
+
+  it('handles one-row and one-column bounds without flat-index wrapping', () => {
+    const rowRoutes = [{ col: 8, row: 7 }];
+    const rowHouses = [{ col: 5, row: 7 }, { col: 6, row: 7 }];
+    expect(nearestRouteDistances({
+      bounds: { left: 5, top: 7, right: 8, bottom: 7 },
+      routes: rowRoutes,
+      houses: rowHouses
+    })).toEqual(bruteForceRouteDistances(rowRoutes, rowHouses));
+    const columnRoutes = [{ col: 5, row: 10 }];
+    const columnHouses = [{ col: 5, row: 7 }, { col: 5, row: 8 }];
+    expect(nearestRouteDistances({
+      bounds: { left: 5, top: 7, right: 5, bottom: 10 },
+      routes: columnRoutes,
+      houses: columnHouses
+    })).toEqual(bruteForceRouteDistances(columnRoutes, columnHouses));
+  });
+
+  it('measures adjacency by cardinal neighbors and counts each house once', () => {
+    expect(countAdjacentHouses([{ col: 1, row: 1 }, { col: 2, row: 1 }, { col: 1, row: 2 }, { col: 3, row: 3 }])).toBe(3);
+    expect(countAdjacentHouses([{ col: 1, row: 1 }, { col: 2, row: 2 }])).toBe(0);
+    expect(countAdjacentHouses([])).toBe(0);
+  });
+
+  it('canonicalizes settlement and house ordering while preserving changes', () => {
+    const first = housingProjection(1, [
+      { id: 'b', houses: [{ col: 4, row: 2 }, { col: 1, row: 2 }] },
+      { id: 'a', houses: [] }
+    ]);
+    expect(first).toEqual(housingProjection(1, [
+      { id: 'a', houses: [] },
+      { id: 'b', houses: [{ col: 1, row: 2 }, { col: 4, row: 2 }] }
+    ]));
+    expect(first).not.toEqual(housingProjection(1, [{ id: 'a', houses: [] }, { id: 'b', houses: [{ col: 1, row: 3 }] }]));
+    expect(first).not.toEqual(housingProjection(2, [{ id: 'a', houses: [] }, { id: 'b', houses: [{ col: 1, row: 2 }, { col: 4, row: 2 }] }]));
+  });
+});
 
 describe('natural route generation', () => {
   const start = { col: 10, row: 20 };
@@ -425,29 +579,31 @@ describe('heroic fantasy world generation', () => {
     }
   });
 
-  it('keeps housing deterministic while producing route-biased, clustered layouts', () => {
-    const maps = [1, 7331, 424242].map((seed) => createMap(seed));
-    expect(maps[0]).toEqual(createMap(1));
-    const distances: number[] = [];
-    let adjacent = 0;
-    let houseTotal = 0;
-    for (const map of maps) for (const settlement of map.settlements ?? []) {
-      const routes: Array<{ col: number; row: number }> = [];
-      const houses: Tile[] = [];
-      for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row++) for (let col = settlement.bounds.left; col <= settlement.bounds.right; col++) {
-        const tile = tileAt(map, { col, row });
-        if (tile?.kind === 'road' || tile?.kind === 'bridge' || tile?.kind === 'gate') routes.push({ col, row });
-        if (tile?.kind === 'house') houses.push(tile);
-      }
-      if (!routes.length) continue;
-      houseTotal += houses.length;
-      for (const house of houses) {
-        distances.push(Math.min(...routes.map((route) => Math.abs(route.col - house.col) + Math.abs(route.row - house.row))));
-        if (houses.some((other) => Math.abs(other.col - house.col) + Math.abs(other.row - house.row) === 1)) adjacent++;
-      }
+  it.each([1, 7331, 424242])('keeps housing deterministic while producing route-biased, clustered layouts (seed %s)', (seed) => {
+    const map = createMap(seed);
+    const metrics = { distanceSum: 0, houseCount: 0, maxDistance: 0, adjacentHouseCount: 0 };
+    const projectionSamples: Array<{ id: string; houses: Point[] }> = [];
+    for (const settlement of map.settlements ?? []) {
+      const sample = collectHousingSample(map, settlement);
+      projectionSamples.push({ id: settlement.id, houses: sample.houses });
+      if (!sample.routes.length) continue;
+      const distances = nearestRouteDistances(sample);
+      metrics.houseCount += sample.houses.length;
+      metrics.distanceSum += distances.reduce((sum, distance) => sum + distance, 0);
+      metrics.maxDistance = Math.max(metrics.maxDistance, ...distances);
+      metrics.adjacentHouseCount += countAdjacentHouses(sample.houses);
     }
-    expect(distances.reduce((sum, distance) => sum + distance, 0) / distances.length).toBeLessThan(8);
-    expect(distances.some((distance) => distance >= 6)).toBe(true);
-    expect(adjacent / houseTotal).toBeGreaterThan(0.35);
+    expect(metrics.houseCount).toBeGreaterThan(0);
+    expect(metrics.distanceSum / metrics.houseCount).toBeLessThan(8);
+    expect(metrics.maxDistance).toBeGreaterThanOrEqual(6);
+    expect(metrics.adjacentHouseCount / metrics.houseCount).toBeGreaterThan(0.35);
+    if (seed === 1) {
+      const repeated = createMap(seed);
+      const repeatedProjection = (repeated.settlements ?? []).map((settlement) => {
+        const sample = collectHousingSample(repeated, settlement);
+        return { id: settlement.id, houses: sample.houses };
+      });
+      expect(housingProjection(seed, projectionSamples)).toEqual(housingProjection(seed, repeatedProjection));
+    }
   });
 });
