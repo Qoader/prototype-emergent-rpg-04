@@ -37,6 +37,20 @@ export type RuntimeFailure = {
 };
 export type GameRuntime = { destroy: () => void };
 
+const WORLD_CHARACTER_FOOT_Y_FRACTION = 0.75;
+const WORLD_CHARACTER_Y_OFFSET =
+  (WORLD_CHARACTER_FOOT_Y_FRACTION - 0.5) * TILE_SIZE;
+
+function positionWorldCharacter(
+  view: Container,
+  position: Readonly<{ x: number; y: number }>
+): void {
+  const x = position.x * TILE_SIZE;
+  const y = position.y * TILE_SIZE + WORLD_CHARACTER_Y_OFFSET;
+  view.position.set(x, y);
+  view.zIndex = y;
+}
+
 export function createGameRuntime({
   host,
   map,
@@ -257,8 +271,7 @@ export function createGameRuntime({
         lastAnimation = `${animation}:${movement.facing}`;
         const frameIndex = Math.floor(animationTime * (walking ? 10 : 2)) % (walking ? 4 : 2);
         player.setFrame(animation, movement.facing, frameIndex);
-        player.view.position.set(movement.position.x * TILE_SIZE, movement.position.y * TILE_SIZE);
-        player.view.zIndex = movement.position.y * TILE_SIZE;
+        positionWorldCharacter(player.view, movement.position);
         for (const npc of controller.adventurers.snapshots()) {
           const resource = adventurerViews.get(npc.id);
           if (!resource) continue;
@@ -270,8 +283,7 @@ export function createGameRuntime({
           const frameIndex =
             Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
           resource.sprite.setFrame(npcAnimation, npc.facing, frameIndex);
-          resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
-          resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
+          positionWorldCharacter(resource.sprite.view, npc.position);
         }
         const goblins = controller.goblins.snapshots();
         const liveGoblinIds = new Set(goblins.map((npc) => npc.id));
@@ -291,8 +303,7 @@ export function createGameRuntime({
           const frameIndex =
             Math.floor(resource.time * (npc.walking ? 10 : 2)) % (npc.walking ? 4 : 2);
           resource.sprite.setFrame(animation, npc.facing, frameIndex);
-          resource.sprite.view.position.set(npc.position.x * TILE_SIZE, npc.position.y * TILE_SIZE);
-          resource.sprite.view.zIndex = npc.position.y * TILE_SIZE;
+          positionWorldCharacter(resource.sprite.view, npc.position);
         }
         marker.clear();
         if (movement.destination)
