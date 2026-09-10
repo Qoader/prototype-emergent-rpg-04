@@ -164,6 +164,113 @@ test.describe('deterministic tactical battle fixture', () => {
     expect(await page.locator('.stats').innerText()).toBe(beforeStats);
     expect(await page.locator('.log').innerText()).toBe(beforeLog);
   });
+  test('keeps a single touch drag active across multiple moves and capture transfer', async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto('/?battle-fixture-solo');
+    await expect(page.getByRole('region', { name: 'Tactical battle' })).toBeVisible({
+      timeout: 8000
+    });
+
+    const result = await page.locator('.battle-board').evaluate(async (board) => {
+      const viewport = board as HTMLElement;
+      const cell = (board.querySelector('.grid button.reachable') ??
+        board.querySelector('.grid button')) as HTMLButtonElement;
+      // DOM-dispatched pointer events do not create a browser pointer, so stub
+      // capture methods while exercising the component's event lifecycle.
+      viewport.setPointerCapture = () => undefined;
+      viewport.hasPointerCapture = () => false;
+      const position = () => {
+        const transform = new DOMMatrixReadOnly(
+          getComputedStyle(board.querySelector('.board-content')!).transform
+        );
+        return { x: transform.m41, y: transform.m42 };
+      };
+      const emit = (target: Element, type: string, init: PointerEventInit) => {
+        const event = new PointerEvent(type, { bubbles: true, ...init });
+        if (init.isPrimary) Object.defineProperty(event, 'isPrimary', { value: true });
+        target.dispatchEvent(event);
+      };
+      const render = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const base = { pointerId: 41, pointerType: 'touch', isPrimary: true, button: 0 };
+      const probe = new PointerEvent('pointerdown', { bubbles: true, ...base });
+      const eventProps = {
+        pointerId: probe.pointerId,
+        button: probe.button,
+        isPrimary: probe.isPrimary,
+        pointerType: probe.pointerType
+      };
+      const box = viewport.getBoundingClientRect();
+      const start = { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 };
+      emit(cell, 'pointerdown', { ...base, ...start });
+      const initial = position();
+      emit(viewport, 'pointermove', {
+        ...base,
+        clientX: start.clientX - 2,
+        clientY: start.clientY - 2
+      });
+      await render();
+      const belowThreshold = position();
+      emit(viewport, 'pointermove', {
+        ...base,
+        clientX: start.clientX - 24,
+        clientY: start.clientY - 18
+      });
+      await render();
+      const afterFirstMove = position();
+      // This models the tile's implicit capture being replaced by viewport
+      // capture. The bubbling event must not terminate the active gesture.
+      emit(board.querySelector('.grid button')!, 'lostpointercapture', { ...base });
+      // After capture transfer, the browser retargets subsequent movement to
+      // the viewport that owns capture.
+      emit(viewport, 'pointermove', {
+        ...base,
+        clientX: start.clientX - 72,
+        clientY: start.clientY - 44
+      });
+      await render();
+      const afterSecondMove = position();
+      // Once the viewport itself loses capture, the gesture must terminate;
+      // later moves for that pointer must not move the camera.
+      emit(viewport, 'lostpointercapture', { ...base });
+      emit(viewport, 'pointermove', {
+        ...base,
+        clientX: start.clientX - 104,
+        clientY: start.clientY - 64
+      });
+      await render();
+      const afterViewportLoss = position();
+      emit(viewport, 'pointerup', {
+        ...base,
+        clientX: start.clientX - 72,
+        clientY: start.clientY - 44
+      });
+      const beforeStats = document.querySelector('.stats')?.textContent;
+      const beforeLog = document.querySelector('.log')?.textContent;
+      emit(cell, 'click', {});
+      return {
+        initial,
+        belowThreshold,
+        afterFirstMove,
+        afterSecondMove,
+        afterViewportLoss,
+        beforeStats,
+        beforeLog,
+        afterClickStats: document.querySelector('.stats')?.textContent,
+        afterClickLog: document.querySelector('.log')?.textContent,
+        eventProps
+      };
+    });
+
+    expect(result.belowThreshold).toEqual(result.initial);
+    expect(result.afterFirstMove, JSON.stringify(result)).not.toEqual(result.belowThreshold);
+    expect(result.afterSecondMove.x).not.toBe(result.afterFirstMove.x);
+    expect(result.afterSecondMove.y).not.toBe(result.afterFirstMove.y);
+    expect(result.afterViewportLoss).toEqual(result.afterSecondMove);
+    expect(result.afterClickStats).toBe(result.beforeStats);
+    expect(result.afterClickLog).toBe(result.beforeLog);
+  });
   test('wins through real movement and attack controls, then continues', async ({ page }) => {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));

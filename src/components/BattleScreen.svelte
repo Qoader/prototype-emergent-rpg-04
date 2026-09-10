@@ -55,7 +55,7 @@
     clampCamera();
   };
   const pointerStart = (event: PointerEvent) => {
-    if (event.button !== 0 || !event.isPrimary) return;
+    if (gesture !== 'idle' || event.button !== 0 || !event.isPrimary) return;
     pointerId = event.pointerId;
     gesture = 'pressed';
     suppressClick = false;
@@ -80,11 +80,19 @@
   const pointerEnd = (event: PointerEvent) => {
     if (event.pointerId !== pointerId) return;
     const wasDragging = gesture === 'dragging';
+    const activePointer = pointerId;
     gesture = 'idle';
     pointerId = -1;
     suppressClick = wasDragging;
-    if (boardViewport.hasPointerCapture(event.pointerId))
-      boardViewport.releasePointerCapture(event.pointerId);
+    if (boardViewport.hasPointerCapture(activePointer))
+      boardViewport.releasePointerCapture(activePointer);
+  };
+  const pointerCaptureLost = (event: PointerEvent) => {
+    // Capture loss bubbles. A tile can lose its implicit touch capture when
+    // the viewport takes ownership after the drag threshold is crossed; that
+    // transition must not end the active gesture.
+    if (event.target !== boardViewport) return;
+    pointerEnd(event);
   };
   const revealFocus = (index: number) => {
     if (!battle || !boardViewport) return;
@@ -166,7 +174,8 @@
         ),
         col,
         row,
-        Boolean(cells.get(`${col},${row}`)?.distance)
+        Boolean(cells.get(`${col},${row}`)?.distance),
+        false
       );
       return;
     } else return;
@@ -233,9 +242,10 @@
     occupant: { side: string } | undefined,
     col: number,
     row: number,
-    reachableCell: boolean
+    reachableCell: boolean,
+    pointerActivation = true
   ) => {
-    if (suppressClick) {
+    if (pointerActivation && suppressClick) {
       suppressClick = false;
       return;
     }
@@ -290,7 +300,7 @@
         on:pointermove={pointerMove}
         on:pointerup={pointerEnd}
         on:pointercancel={pointerEnd}
-        on:lostpointercapture={pointerEnd}
+        on:lostpointercapture={pointerCaptureLost}
       >
         <div
           class="board-content"
@@ -342,7 +352,7 @@
                 aria-describedby={cell?.distance ? `move-cost-${index}` : undefined}
                 aria-disabled={!canAct ||
                   (occupant?.side !== 'goblin' && occupant?.side !== 'player' && !cell?.distance)}
-                on:click={() => cellClick(occupant, col, row, Boolean(cell?.distance))}
+                on:click={() => cellClick(occupant, col, row, Boolean(cell?.distance), true)}
                 >{#if cell?.distance}<span id={`move-cost-${index}`} class="sr-only"
                     >Move cost {cell.distance} MP</span
                   >{/if}{#if battleArtState !== 'ready'}{occupant?.side === 'player'
