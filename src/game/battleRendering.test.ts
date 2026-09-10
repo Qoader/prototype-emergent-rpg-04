@@ -28,6 +28,10 @@ describe('battle rendering coordinates', () => {
     expect(spriteFootPosition(pose)).toEqual({ x: 132, y: 235 });
     expect(animationFrame(pose)).toBe(3);
     expect(animationFrame({ ...pose, moving: false })).toBe(0);
+    expect(animationFrame({ ...pose, moving: false }, 0.5)).toBe(1);
+    expect(animationFrame({ ...pose, moving: false }, 1)).toBe(0);
+    // Walking remains wholly driven by playback elapsed time.
+    expect(animationFrame(pose, 0.5)).toBe(3);
   });
 
   it('adds drawing padding without changing the logical grid dimensions', () => {

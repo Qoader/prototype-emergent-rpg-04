@@ -1,8 +1,10 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { createGoblinSprite, createPlayerSprite } from './playerSprite';
+import type { PlayerSprite } from './playerSprite';
 import { drawCapturedTileAppearance } from './tileIllustration';
 import type { Tile } from './types';
 import type { BattleState } from './battle/types';
+import type { Facing } from './movement';
 import {
   animationFrame,
   combatantPose,
@@ -14,6 +16,8 @@ import {
   EMPTY_BATTLE_OVERLAY,
   type BattleOverlayState
 } from './battleRendering';
+import type { BattleVisualPose } from './battleRendering';
+import type { BattleCombatant } from './battle/types';
 
 /** Rendering-only tactical view. It intentionally consumes snapshots, never rules. */
 export type BattleRuntimeOptions = {
@@ -21,6 +25,13 @@ export type BattleRuntimeOptions = {
   onReady?: () => void;
   /** Internal seam for deterministic lifecycle tests. */
   applicationFactory?: () => Application;
+  /** Internal seam for deterministic animation tests. */
+  animationScheduler?: BattleAnimationScheduler;
+};
+export type BattleAnimationScheduler = {
+  now: () => number;
+  request: (callback: FrameRequestCallback) => number;
+  cancel: (handle: number) => void;
 };
 export type BattleRuntime = {
   init: Promise<void>;
@@ -28,6 +39,23 @@ export type BattleRuntime = {
   destroy: () => void;
 };
 type RuntimePhase = 'initializing' | 'ready' | 'failed' | 'disposed';
+type CharacterAnimationState = {
+  combatantId: string;
+  animation: 'idle' | 'walk';
+  facing: Facing;
+  idleElapsedSeconds: number;
+  lastSampleMs: number;
+  displayedFrame: number;
+};
+
+const browserAnimationScheduler: BattleAnimationScheduler | undefined =
+  typeof globalThis.requestAnimationFrame === 'function'
+    ? {
+        now: () => globalThis.performance.now(),
+        request: (callback) => globalThis.requestAnimationFrame(callback),
+        cancel: (handle) => globalThis.cancelAnimationFrame(handle)
+      }
+    : undefined;
 
 /** Owns a Pixi application whose initialization is asynchronous. */
 export function createBattleRuntime(
@@ -46,6 +74,16 @@ export function createBattleRuntime(
   let goblin: ReturnType<typeof createGoblinSprite> | undefined;
   let ownedCanvas: HTMLCanvasElement | undefined;
   let readyNotified = false;
+  const animationScheduler = options.animationScheduler ?? browserAnimationScheduler;
+  let animationHandle: number | undefined;
+  let playerAnimation: CharacterAnimationState | undefined;
+  let goblinAnimation: CharacterAnimationState | undefined;
+
+  const stopAnimation = () => {
+    if (animationHandle === undefined || !animationScheduler) return;
+    animationScheduler.cancel(animationHandle);
+    animationHandle = undefined;
+  };
 
   const reportError = (error: unknown) => {
     if (errorReported) return;
@@ -58,6 +96,7 @@ export function createBattleRuntime(
   };
   const destroyInitializedApplication = () => {
     if (!initialized || destroyed) return;
+    stopAnimation();
     destroyed = true;
     // The map application remains alive while a battle is mounted/unmounted.
     // Releasing Pixi's process-wide batches here invalidates the map renderer.
@@ -68,6 +107,8 @@ export function createBattleRuntime(
     }
     player = undefined;
     goblin = undefined;
+    playerAnimation = undefined;
+    goblinAnimation = undefined;
     const canvas = ownedCanvas;
     ownedCanvas = undefined;
     try {
@@ -75,6 +116,83 @@ export function createBattleRuntime(
     } catch (error) {
       reportError(error);
     }
+  };
+  const synchronizeCharacter = (
+    sprite: PlayerSprite,
+    combatant: BattleCombatant | undefined,
+    pose: BattleVisualPose | undefined,
+    resource: CharacterAnimationState | undefined,
+    nowMs: number
+  ): CharacterAnimationState | undefined => {
+    if (!combatant || !pose || combatant.hp <= 0) {
+      sprite.view.visible = false;
+      return undefined;
+    }
+    const animation: CharacterAnimationState['animation'] = pose.moving ? 'walk' : 'idle';
+    const changed =
+      !resource ||
+      resource.combatantId !== combatant.id ||
+      resource.animation !== animation ||
+      resource.facing !== pose.facing;
+    const next = changed
+      ? {
+          combatantId: combatant.id,
+          animation,
+          facing: pose.facing,
+          idleElapsedSeconds: 0,
+          lastSampleMs: nowMs,
+          displayedFrame: 0
+        }
+      : resource;
+    sprite.view.visible = true;
+    sprite.view.scale.set(BATTLE_SCALE);
+    const foot = spriteFootPosition(pose);
+    sprite.view.position.set(foot.x, foot.y);
+    const frame = animationFrame(pose, next.idleElapsedSeconds);
+    sprite.setFrame(animation, pose.facing, frame);
+    next.displayedFrame = frame;
+    return next;
+  };
+  const failPresentation = (error: unknown) => {
+    if (phase === 'failed' || phase === 'disposed') return;
+    phase = 'failed';
+    stopAnimation();
+    reportError(error);
+    destroyInitializedApplication();
+  };
+  const advanceIdle = (
+    sprite: PlayerSprite | undefined,
+    resource: CharacterAnimationState | undefined,
+    nowMs: number
+  ) => {
+    if (!sprite || !resource || resource.animation !== 'idle' || !sprite.view.visible) return false;
+    const elapsed = Math.max(0, Math.min((nowMs - resource.lastSampleMs) / 1000, 0.1));
+    resource.lastSampleMs = nowMs;
+    resource.idleElapsedSeconds += elapsed;
+    const frame = Math.floor(resource.idleElapsedSeconds * 2) % 2;
+    if (frame === resource.displayedFrame) return false;
+    sprite.setFrame('idle', resource.facing, frame);
+    resource.displayedFrame = frame;
+    return true;
+  };
+  const tickAnimation: FrameRequestCallback = () => {
+    animationHandle = undefined;
+    if (phase !== 'ready' || !latestState) return;
+    try {
+      const nowMs = animationScheduler!.now();
+      const playerChanged = advanceIdle(player, playerAnimation, nowMs);
+      const goblinChanged = advanceIdle(goblin, goblinAnimation, nowMs);
+      const changed = playerChanged || goblinChanged;
+      if (changed) app.render();
+      ensureAnimation();
+    } catch (error) {
+      failPresentation(error);
+    }
+  };
+  const ensureAnimation = () => {
+    if (!animationScheduler || animationHandle !== undefined || phase !== 'ready' || !latestState)
+      return;
+    animationHandle = animationScheduler.request(tickAnimation);
   };
   const draw = (state: BattleState, overlay: BattleOverlayState = EMPTY_BATTLE_OVERLAY) => {
     if (phase !== 'ready' || !player || !goblin) return;
@@ -125,12 +243,19 @@ export function createBattleRuntime(
       } else drawGridLines(gridLines);
       const targets = stage.children.find((child) => child.label === 'battle-targets') as
         Graphics | undefined;
-      const drawCellBorder = (graphics: Graphics, point: { col: number; row: number }, color: string, inset = 0) => {
+      const drawCellBorder = (
+        graphics: Graphics,
+        point: { col: number; row: number },
+        color: string,
+        inset = 0
+      ) => {
         const x = point.col * cell + inset;
         const y = point.row * cell + inset;
         const size = cell - inset * 2;
         const thickness = 2;
-        graphics.rect(x, y, size, thickness).rect(x, y + size - thickness, size, thickness)
+        graphics
+          .rect(x, y, size, thickness)
+          .rect(x, y + size - thickness, size, thickness)
           .rect(x, y + thickness, thickness, size - thickness * 2)
           .rect(x + size - thickness, y + thickness, thickness, size - thickness * 2)
           .fill({ color, alpha: 1 });
@@ -147,7 +272,8 @@ export function createBattleRuntime(
         drawTargets(targetLayer);
         stage.addChildAt(targetLayer, 2);
       } else drawTargets(targets);
-      const focus = stage.children.find((child) => child.label === 'battle-focus') as Graphics | undefined;
+      const focus = stage.children.find((child) => child.label === 'battle-focus') as
+        Graphics | undefined;
       const drawFocus = (graphics: Graphics) => {
         graphics.clear();
         if (overlay.keyboardFocus) drawCellBorder(graphics, overlay.keyboardFocus, '#ffffff', 4);
@@ -178,48 +304,44 @@ export function createBattleRuntime(
         // Characters already exist in the stage; keep the border below them.
         stage.addChildAt(outline, 4);
       } else drawBorder(border);
+      const nowMs = animationScheduler?.now() ?? 0;
       const actor = state.combatants.player;
       const enemy = Object.values(state.combatants).find(
         (combatant) => combatant.side === 'goblin'
       );
-      if (actor) {
-        const actorPose = combatantPose(state, actor);
-        player.view.visible = actor.hp > 0;
-        player.view.scale.set(BATTLE_SCALE);
-        const foot = spriteFootPosition(actorPose);
-        player.view.position.set(foot.x, foot.y);
-        player.setFrame(
-          actorPose.moving ? 'walk' : 'idle',
-          actorPose.facing,
-          animationFrame(actorPose)
-        );
-      } else player.view.visible = false;
-      if (enemy) {
-        const goblinPose = combatantPose(state, enemy);
-        goblin.view.visible = enemy.hp > 0;
-        goblin.view.scale.set(BATTLE_SCALE);
-        const foot = spriteFootPosition(goblinPose);
-        goblin.view.position.set(foot.x, foot.y);
-        goblin.setFrame(
-          goblinPose.moving ? 'walk' : 'idle',
-          goblinPose.facing,
-          animationFrame(goblinPose)
-        );
-      } else goblin.view.visible = false;
+      playerAnimation = synchronizeCharacter(
+        player,
+        actor,
+        actor ? combatantPose(state, actor) : undefined,
+        playerAnimation,
+        nowMs
+      );
+      goblinAnimation = synchronizeCharacter(
+        goblin,
+        enemy,
+        enemy ? combatantPose(state, enemy) : undefined,
+        goblinAnimation,
+        nowMs
+      );
       app.render();
       if (!readyNotified) {
         readyNotified = true;
         options.onReady?.();
       }
+      ensureAnimation();
     } catch (error) {
-      phase = 'failed';
-      reportError(error);
-      destroyInitializedApplication();
+      failPresentation(error);
     }
   };
   const init = Promise.resolve()
     .then(() =>
-      app.init({ backgroundAlpha: 0, antialias: false, autoStart: false, resolution: 1, resizeTo: host })
+      app.init({
+        backgroundAlpha: 0,
+        antialias: false,
+        autoStart: false,
+        resolution: 1,
+        resizeTo: host
+      })
     )
     .then(() => {
       initialized = true;

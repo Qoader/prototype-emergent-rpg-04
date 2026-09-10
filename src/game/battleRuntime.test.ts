@@ -1,13 +1,16 @@
 import { Container, Graphics } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 import { createBattle } from './battle/engine';
-import { createBattleRuntime } from './battleRuntime';
+import { createBattleRuntime, type BattleAnimationScheduler } from './battleRuntime';
 
 type Deferred = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
 const deferred = (): Deferred => {
   let resolve!: () => void;
   let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   return { promise, resolve, reject };
 };
 
@@ -21,6 +24,7 @@ function fakeApplication(
   const resized: Array<{ width: number; height: number }> = [];
   let destroyArgs: unknown[] = [];
   let destroyed = false;
+  let shouldFailRender = renderFailure;
   const canvas = { remove: () => undefined };
   const app = {
     stage: new Container(),
@@ -30,7 +34,10 @@ function fakeApplication(
     },
     init: () => initialization,
     renderer: { resize: (width: number, height: number) => resized.push({ width, height }) },
-    render: () => { renderCount += 1; if (renderFailure) throw new Error('render failed'); },
+    render: () => {
+      renderCount += 1;
+      if (shouldFailRender) throw new Error('render failed');
+    },
     destroy: (...args: unknown[]) => {
       destroyCount += 1;
       destroyArgs = args;
@@ -41,11 +48,56 @@ function fakeApplication(
   return {
     app,
     canvas,
-    get destroyCount() { return destroyCount; },
-    get renderCount() { return renderCount; },
-    get resized() { return resized; },
-    get destroyArgs() { return destroyArgs; }
+    get destroyCount() {
+      return destroyCount;
+    },
+    get renderCount() {
+      return renderCount;
+    },
+    get resized() {
+      return resized;
+    },
+    get destroyArgs() {
+      return destroyArgs;
+    },
+    setRenderFailure: () => {
+      shouldFailRender = true;
+    }
   };
+}
+
+function fakeAnimationScheduler() {
+  let nowMs = 0;
+  let nextHandle = 0;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  const scheduler: BattleAnimationScheduler = {
+    now: () => nowMs,
+    request: (callback) => {
+      const handle = nextHandle++;
+      callbacks.set(handle, callback);
+      return handle;
+    },
+    cancel: (handle) => {
+      callbacks.delete(handle);
+    }
+  };
+  return {
+    scheduler,
+    tick(milliseconds: number) {
+      nowMs += milliseconds;
+      const pending = [...callbacks.values()];
+      callbacks.clear();
+      for (const callback of pending) callback(nowMs);
+    },
+    get pending() {
+      return callbacks.size;
+    }
+  };
+}
+
+function visibleFrame(sprite: Container) {
+  const index = sprite.children.findIndex((child, childIndex) => childIndex > 0 && child.visible);
+  return index >= 17 ? (index - 17) % 2 : index;
 }
 
 function testHost() {
@@ -72,8 +124,12 @@ function testHost() {
   return {
     value,
     children,
-    get appendCount() { return appendCount; },
-    get removeCount() { return removeCount; }
+    get appendCount() {
+      return appendCount;
+    },
+    get removeCount() {
+      return removeCount;
+    }
   };
 }
 
@@ -82,9 +138,12 @@ describe('battle runtime asynchronous ownership', () => {
     const gate = deferred();
     const fake = fakeApplication(gate.promise);
     const target = testHost();
-    const runtime = createBattleRuntime(target.value, { applicationFactory: () => fake.app as never });
+    const runtime = createBattleRuntime(target.value, {
+      applicationFactory: () => fake.app as never
+    });
     await Promise.resolve();
-    runtime.destroy(); runtime.destroy();
+    runtime.destroy();
+    runtime.destroy();
     expect(fake.destroyCount).toBe(0);
     gate.resolve();
     await runtime.init;
@@ -95,14 +154,18 @@ describe('battle runtime asynchronous ownership', () => {
   it('buffers the newest state and renders it once after initialization', async () => {
     const gate = deferred();
     const fake = fakeApplication(gate.promise);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never });
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never
+    });
     const first = createBattle('goblin');
     const latest = { ...first, turn: 2 };
-    runtime.update(first); runtime.update(latest);
+    runtime.update(first);
+    runtime.update(latest);
     gate.resolve();
     await runtime.init;
     expect(fake.renderCount).toBe(1);
-    runtime.destroy(); runtime.update(first);
+    runtime.destroy();
+    runtime.update(first);
     expect(fake.renderCount).toBe(1);
   });
 
@@ -110,7 +173,10 @@ describe('battle runtime asynchronous ownership', () => {
     const gate = deferred();
     const ready: number[] = [];
     const fake = fakeApplication(gate.promise);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never, onReady: () => ready.push(fake.renderCount) });
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never,
+      onReady: () => ready.push(fake.renderCount)
+    });
     runtime.update(createBattle('goblin'));
     gate.resolve();
     await runtime.init;
@@ -123,7 +189,9 @@ describe('battle runtime asynchronous ownership', () => {
   it('composes a padded, unit-scale scene with integer sprite coordinates', async () => {
     const gate = deferred();
     const fake = fakeApplication(gate.promise);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never });
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never
+    });
     const state = createBattle('goblin');
     state.visual = {
       player: { x: 2.51, y: 4.5, facing: 'east', moving: true, elapsed: 0.2 },
@@ -175,10 +243,15 @@ describe('battle runtime asynchronous ownership', () => {
   it('keeps transient target and keyboard-focus graphics below sprites and redraws them', async () => {
     const gate = deferred();
     const fake = fakeApplication(gate.promise);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never });
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never
+    });
     const state = createBattle('goblin');
     runtime.update(state, {
-      movementTargets: [{ col: 1, row: 4 }, { col: 2, row: 3 }],
+      movementTargets: [
+        { col: 1, row: 4 },
+        { col: 2, row: 3 }
+      ],
       attackTargets: [{ col: 6, row: 4 }],
       keyboardFocus: { col: 2, row: 4 }
     });
@@ -217,11 +290,15 @@ describe('battle runtime asynchronous ownership', () => {
     const gate = deferred();
     const fake = fakeApplication(gate.promise);
     const target = testHost();
-    const runtime = createBattleRuntime(target.value, { applicationFactory: () => fake.app as never });
+    const runtime = createBattleRuntime(target.value, {
+      applicationFactory: () => fake.app as never
+    });
     gate.resolve();
     await runtime.init;
     expect(target.appendCount).toBe(1);
-    runtime.destroy(); runtime.destroy(); runtime.destroy();
+    runtime.destroy();
+    runtime.destroy();
+    runtime.destroy();
     expect(fake.destroyCount).toBe(1);
     expect(fake.destroyArgs).toEqual([
       { removeView: true, releaseGlobalResources: false },
@@ -237,7 +314,9 @@ describe('battle runtime asynchronous ownership', () => {
     const target = testHost();
     const unrelated = { remove: () => undefined };
     target.value.appendChild(unrelated as never);
-    const runtime = createBattleRuntime(target.value, { applicationFactory: () => fake.app as never });
+    const runtime = createBattleRuntime(target.value, {
+      applicationFactory: () => fake.app as never
+    });
     gate.resolve();
     await runtime.init;
     runtime.destroy();
@@ -251,10 +330,14 @@ describe('battle runtime asynchronous ownership', () => {
     const oldFake = fakeApplication(oldGate.promise);
     const newFake = fakeApplication(newGate.promise);
     const target = testHost();
-    const oldRuntime = createBattleRuntime(target.value, { applicationFactory: () => oldFake.app as never });
+    const oldRuntime = createBattleRuntime(target.value, {
+      applicationFactory: () => oldFake.app as never
+    });
     await Promise.resolve();
     oldRuntime.destroy();
-    const newRuntime = createBattleRuntime(target.value, { applicationFactory: () => newFake.app as never });
+    const newRuntime = createBattleRuntime(target.value, {
+      applicationFactory: () => newFake.app as never
+    });
     newGate.resolve();
     await newRuntime.init;
     oldGate.resolve();
@@ -286,7 +369,10 @@ describe('battle runtime asynchronous ownership', () => {
     const gate = deferred();
     const errors: unknown[] = [];
     const fake = fakeApplication(gate.promise);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never, onError: (value) => errors.push(value) });
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never,
+      onError: (value) => errors.push(value)
+    });
     gate.reject(error);
     await runtime.init;
     runtime.destroy();
@@ -298,7 +384,10 @@ describe('battle runtime asynchronous ownership', () => {
     const gate = deferred();
     const errors: unknown[] = [];
     const fake = fakeApplication(gate.promise);
-    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never, onError: (value) => errors.push(value) });
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never,
+      onError: (value) => errors.push(value)
+    });
     await Promise.resolve();
     runtime.destroy();
     gate.reject(new Error('late renderer rejection'));
@@ -313,15 +402,104 @@ describe('battle runtime asynchronous ownership', () => {
     const target = testHost();
     const runtime = createBattleRuntime(target.value, {
       applicationFactory: () => fake.app as never,
-      onError: (error) => { errors.push(error); throw new Error('diagnostics failed'); }
+      onError: (error) => {
+        errors.push(error);
+        throw new Error('diagnostics failed');
+      }
     });
     gate.resolve();
     await runtime.init;
     runtime.update(createBattle('goblin'));
     expect(fake.destroyCount).toBe(1);
     expect(target.children).toHaveLength(0);
-    expect(() => { runtime.update(createBattle('goblin')); runtime.destroy(); runtime.destroy(); }).not.toThrow();
+    expect(() => {
+      runtime.update(createBattle('goblin'));
+      runtime.destroy();
+      runtime.destroy();
+    }).not.toThrow();
     expect(errors).toHaveLength(1);
     expect((errors[0] as Error).message).toBe('render failed');
+  });
+
+  it('animates both stationary living sprites without recomposing the board', async () => {
+    const gate = deferred();
+    const fake = fakeApplication(gate.promise);
+    const clock = fakeAnimationScheduler();
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never,
+      animationScheduler: clock.scheduler
+    });
+    const state = createBattle('goblin');
+    state.outcome = 'victory';
+    runtime.update(state);
+    gate.resolve();
+    await runtime.init;
+    const stage = fake.app.stage.children[0] as Container;
+    const [player, goblin] = stage.children.slice(5) as Container[];
+    expect(visibleFrame(player)).toBe(0);
+    expect(visibleFrame(goblin)).toBe(0);
+    expect(clock.pending).toBe(1);
+    // A suspended tab cannot jump through a complete idle cycle on resume.
+    clock.tick(1000);
+    expect(visibleFrame(player)).toBe(0);
+    expect(visibleFrame(goblin)).toBe(0);
+    for (let index = 0; index < 4; index++) clock.tick(100);
+    expect(visibleFrame(player)).toBe(1);
+    expect(visibleFrame(goblin)).toBe(1);
+    expect(fake.renderCount).toBe(2);
+    expect(fake.resized).toHaveLength(1);
+    runtime.destroy();
+  });
+
+  it('resets idle on movement or facing changes while preserving it for overlay updates', async () => {
+    const gate = deferred();
+    const fake = fakeApplication(gate.promise);
+    const clock = fakeAnimationScheduler();
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never,
+      animationScheduler: clock.scheduler
+    });
+    const state = createBattle('goblin');
+    runtime.update(state);
+    gate.resolve();
+    await runtime.init;
+    const stage = fake.app.stage.children[0] as Container;
+    const player = stage.children[5] as Container;
+    for (let index = 0; index < 5; index++) clock.tick(100);
+    expect(visibleFrame(player)).toBe(1);
+    runtime.update(state, {
+      movementTargets: [{ col: 1, row: 1 }],
+      attackTargets: [],
+      keyboardFocus: null
+    });
+    expect(visibleFrame(player)).toBe(1);
+    state.visual = { player: { x: 2.5, y: 4.5, facing: 'east', moving: true, elapsed: 0.2 } };
+    runtime.update(state);
+    state.visual = { player: { x: 2.5, y: 4.5, facing: 'east', moving: false } };
+    runtime.update(state);
+    expect(visibleFrame(player)).toBe(0);
+    runtime.destroy();
+  });
+
+  it('cancels animation on destruction and fails safely when an idle render fails', async () => {
+    const gate = deferred();
+    const errors: unknown[] = [];
+    const fake = fakeApplication(gate.promise);
+    const clock = fakeAnimationScheduler();
+    const runtime = createBattleRuntime(testHost().value, {
+      applicationFactory: () => fake.app as never,
+      animationScheduler: clock.scheduler,
+      onError: (error) => errors.push(error)
+    });
+    runtime.update(createBattle('goblin'));
+    gate.resolve();
+    await runtime.init;
+    fake.setRenderFailure();
+    for (let index = 0; index < 5; index++) clock.tick(100);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe('render failed');
+    expect(fake.destroyCount).toBe(1);
+    expect(clock.pending).toBe(0);
+    runtime.destroy();
   });
 });

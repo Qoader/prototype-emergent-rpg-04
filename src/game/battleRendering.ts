@@ -32,14 +32,14 @@ export type BattleVisualPose = {
 
 export const boardPixelSize = (state: Pick<BattleState, 'width' | 'height'>) => ({
   width: state.width * BATTLE_TILE_SIZE,
-  height: state.height * BATTLE_TILE_SIZE,
+  height: state.height * BATTLE_TILE_SIZE
 });
 
 export const battleSurfacePixelSize = (state: Pick<BattleState, 'width' | 'height'>) => {
   const board = boardPixelSize(state);
   return {
     width: board.width + BATTLE_RENDER_PADDING * 2,
-    height: board.height + BATTLE_RENDER_PADDING * 2,
+    height: board.height + BATTLE_RENDER_PADDING * 2
   };
 };
 
@@ -50,7 +50,7 @@ export function combatantPose(state: BattleState, combatant: BattleCombatant): B
     y: visual?.y ?? combatant.position.row + 0.5,
     facing: visual?.facing ?? 'south',
     moving: visual?.moving ?? false,
-    elapsed: visual?.elapsed,
+    elapsed: visual?.elapsed
   };
 }
 
@@ -59,12 +59,16 @@ export function spriteFootPosition(pose: BattleVisualPose) {
     // Quantize only the final display position. Simulation coordinates remain
     // fractional so movement timing and routes do not accumulate rounding error.
     x: Math.round(pose.x * BATTLE_TILE_SIZE),
-    y: Math.round((pose.y + 0.5) * BATTLE_TILE_SIZE - BATTLE_FOOT_INSET),
+    y: Math.round((pose.y + 0.5) * BATTLE_TILE_SIZE - BATTLE_FOOT_INSET)
   };
 }
 
-export const animationFrame = (pose: BattleVisualPose) =>
-  pose.moving ? Math.floor((pose.elapsed ?? 0) * 10) % 4 : 0;
+/**
+ * Walking is driven by the battle playback clock. Idle animation belongs to
+ * the renderer, because a stationary battle snapshot need not change.
+ */
+export const animationFrame = (pose: BattleVisualPose, idleElapsedSeconds = 0) =>
+  pose.moving ? Math.floor((pose.elapsed ?? 0) * 10) % 4 : Math.floor(idleElapsedSeconds * 2) % 2;
 
 export function clampBattleCameraAxis(
   requested: number,
