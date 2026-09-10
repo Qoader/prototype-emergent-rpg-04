@@ -11,6 +11,7 @@
     clampBattleCameraAxis,
     revealBattleCameraAxis
   } from '../game/battleRendering';
+  import type { Point } from '../game/types';
   import { canAttack } from '../game/battle/legality';
   export let battle: GameSnapshot['battle'];
   export let battleBusy: boolean;
@@ -33,7 +34,7 @@
   let originX = 0;
   let originY = 0;
   let hoveredCost: number | undefined;
-  let previewPath: string[] = [];
+  let keyboardFocus: Point | null = null;
   $: boardWidth = battle ? battle.width * BATTLE_TILE_SIZE : BATTLE_TILE_SIZE * 10;
   $: boardHeight = battle ? battle.height * BATTLE_TILE_SIZE : BATTLE_TILE_SIZE * 10;
   $: surface = battle
@@ -213,20 +214,9 @@
       if (battleRuntime === runtime) battleRuntime = undefined;
     };
   });
-  $: if (battle && battleRuntime) battleRuntime.update(battle);
   $: player = battle?.combatants.player;
   $: goblin = battle && Object.values(battle.combatants).find((c) => c.side === 'goblin');
   $: cells = battle && player ? reachable(battle, 'player') : new Map();
-  const previewRoute = (col: number, row: number) => {
-    const result: string[] = [];
-    let node = cells.get(`${col},${row}`);
-    while (node) {
-      result.unshift(`${node.point.col},${node.point.row}`);
-      if (!node.previous) break;
-      node = cells.get(node.previous);
-    }
-    return result;
-  };
   const move = (col: number, row: number) =>
     dispatch({ kind: 'move', actorId: 'player', destination: { col, row } });
   const attack = () => {
@@ -241,6 +231,13 @@
     !battle.visual?.[battle.activeId]?.moving
   );
   $: attackReady = Boolean(battle && goblin && canAct && canAttack(battle, 'player', goblin.id));
+  $: movementTargets = canAct ? [...cells.values()].filter((cell) => cell.distance > 0).map((cell) => cell.point) : [];
+  $: attackTargets = canAct && battle
+    ? Object.values(battle.combatants).filter((combatant) => combatant.side === 'goblin' && canAttack(battle, 'player', combatant.id)).map((combatant) => combatant.position)
+    : [];
+  $: movementTargetKeys = new Set(movementTargets.map((point) => `${point.col},${point.row}`));
+  $: attackTargetKeys = new Set(attackTargets.map((point) => `${point.col},${point.row}`));
+  $: if (battle && battleRuntime) battleRuntime.update(battle, { movementTargets, attackTargets, keyboardFocus });
   $: if (battle?.outcome && battle.outcome !== lastOutcome) {
     lastOutcome = battle.outcome;
     void tick().then(() => continueButton?.focus());
@@ -333,28 +330,26 @@
                 tabindex={index === focusIndex ? 0 : -1}
                 on:mouseenter={() => {
                   hoveredCost = cell?.distance;
-                  previewPath = previewRoute(col, row);
                 }}
                 on:mouseleave={() => {
                   hoveredCost = undefined;
-                  previewPath = [];
                 }}
-                on:focus={() => {
+                on:focus={(event) => {
                   hoveredCost = cell?.distance;
-                  previewPath = previewRoute(col, row);
+                  // Pointer activation also focuses a button; only expose the
+                  // canvas focus marker when the browser considers it keyboard-visible.
+                  keyboardFocus = (event.currentTarget as HTMLElement).matches(':focus-visible')
+                    ? { col, row }
+                    : null;
                 }}
                 on:blur={() => {
                   hoveredCost = undefined;
-                  previewPath = [];
+                  keyboardFocus = null;
                 }}
                 on:keydown={(event) => gridKey(event, index, col, row)}
-                class:reachable={Boolean(cell?.distance)}
-                class:preview={previewPath.includes(`${col},${row}`)}
-                class:attackable={Boolean(
-                  occupant?.side === 'goblin' && canAttack(battle, 'player', occupant.id)
-                )}
-                class:player={occupant?.side === 'player'}
-                class:goblin={occupant?.side === 'goblin'}
+                class:reachable={movementTargetKeys.has(`${col},${row}`)}
+                class:attackable={attackTargetKeys.has(`${col},${row}`)}
+                class:focused={keyboardFocus?.col === col && keyboardFocus?.row === row}
                 role="gridcell"
                 aria-label={`${col}, ${row}${occupant ? `, ${occupant.side}` : ''}`}
                 aria-describedby={cell?.distance ? `move-cost-${index}` : undefined}
@@ -522,24 +517,20 @@
     font-size: 1.2rem;
   }
   .battle-board.ready .grid button {
-    background: rgba(38, 59, 69, 0.08);
+    background: transparent;
+    border-color: transparent;
+    outline: none;
+    box-shadow: none;
   }
-  .battle-board.ready .grid button.reachable {
-    background: rgba(87, 133, 89, 0.3);
+  .battle-board:not(.ready) .grid button.reachable {
+    box-shadow: inset 0 0 0 2px #57b86b;
   }
-  .battle-board.ready .grid button.player {
-    background: rgba(43, 103, 80, 0.38);
+  .battle-board:not(.ready) .grid button.attackable {
+    box-shadow: inset 0 0 0 2px #e36559;
   }
-  .battle-board.ready .grid button.goblin {
-    background: rgba(147, 69, 57, 0.38);
-  }
-  .grid button.attackable {
-    outline: 3px solid #f8d36b;
-    outline-offset: -3px;
-  }
-  .grid button.preview {
-    background: rgba(214, 184, 103, 0.38);
-    box-shadow: inset 0 0 0 2px rgba(248, 211, 107, 0.75);
+  .battle-board:not(.ready) .grid button.focused {
+    outline: 2px solid #fff;
+    outline-offset: -6px;
   }
   .sr-only {
     position: absolute;

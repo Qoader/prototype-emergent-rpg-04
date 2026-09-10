@@ -1,4 +1,4 @@
-import { Container } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 import { createBattle } from './battle/engine';
 import { createBattleRuntime } from './battleRuntime';
@@ -129,18 +129,25 @@ describe('battle runtime asynchronous ownership', () => {
       player: { x: 2.51, y: 4.5, facing: 'east', moving: true, elapsed: 0.2 },
       goblin: { x: 6.49, y: 4.5, facing: 'west', moving: false }
     };
-    runtime.update(state);
+    runtime.update(state, {
+      movementTargets: [{ col: 1, row: 1 }],
+      attackTargets: [{ col: 6, row: 4 }],
+      keyboardFocus: { col: 2, row: 4 }
+    });
     gate.resolve();
     await runtime.init;
     const stage = fake.app.stage.children[0] as Container;
     expect(stage.position).toMatchObject({ x: 8, y: 8 });
     expect(stage.children.map((child) => child.label)).toEqual([
       'battle-grid',
+      'battle-grid-lines',
+      'battle-targets',
+      'battle-focus',
       'battle-border',
       null,
       null
     ]);
-    const [player, goblin] = stage.children.slice(2) as Container[];
+    const [player, goblin] = stage.children.slice(5) as Container[];
     expect(player.scale).toMatchObject({ x: 1, y: 1 });
     expect(goblin.scale).toMatchObject({ x: 1, y: 1 });
     expect(Number.isInteger(player.position.x)).toBe(true);
@@ -162,6 +169,47 @@ describe('battle runtime asynchronous ownership', () => {
     expect(goblin.scale).toMatchObject({ x: 1, y: 1 });
     expect(player.position).toMatchObject({ x: 108, y: 235 });
     expect(goblin.position).toMatchObject({ x: 324, y: 235 });
+    runtime.destroy();
+  });
+
+  it('keeps transient target and keyboard-focus graphics below sprites and redraws them', async () => {
+    const gate = deferred();
+    const fake = fakeApplication(gate.promise);
+    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never });
+    const state = createBattle('goblin');
+    runtime.update(state, {
+      movementTargets: [{ col: 1, row: 4 }, { col: 2, row: 3 }],
+      attackTargets: [{ col: 6, row: 4 }],
+      keyboardFocus: { col: 2, row: 4 }
+    });
+    gate.resolve();
+    await runtime.init;
+
+    const stage = fake.app.stage.children[0] as Container;
+    const targets = stage.children.find((child) => child.label === 'battle-targets') as Graphics;
+    const focus = stage.children.find((child) => child.label === 'battle-focus') as Graphics;
+    const player = stage.children[5]!;
+    const goblin = stage.children[6]!;
+    expect(stage.getChildIndex(targets)).toBeLessThan(stage.getChildIndex(player));
+    expect(stage.getChildIndex(targets)).toBeLessThan(stage.getChildIndex(goblin));
+    expect(stage.getChildIndex(focus)).toBeLessThan(stage.getChildIndex(player));
+    expect(stage.getChildIndex(focus)).toBeLessThan(stage.getChildIndex(goblin));
+    expect(targets.context.instructions.length).toBeGreaterThan(0);
+    expect(focus.context.instructions.length).toBeGreaterThan(0);
+
+    runtime.update(state, { movementTargets: [], attackTargets: [], keyboardFocus: null });
+    expect(stage.children.find((child) => child.label === 'battle-targets')).toBe(targets);
+    expect(stage.children.find((child) => child.label === 'battle-focus')).toBe(focus);
+    expect(targets.context.instructions).toHaveLength(0);
+    expect(focus.context.instructions).toHaveLength(0);
+
+    runtime.update(state, {
+      movementTargets: [{ col: 3, row: 4 }],
+      attackTargets: [],
+      keyboardFocus: { col: 3, row: 4 }
+    });
+    expect(targets.context.instructions.length).toBeGreaterThan(0);
+    expect(focus.context.instructions.length).toBeGreaterThan(0);
     runtime.destroy();
   });
 

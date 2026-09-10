@@ -1,5 +1,6 @@
 import type { Facing } from './movement';
 import type { BattleCombatant, BattleState } from './battle/types';
+import type { Point } from './types';
 
 export const BATTLE_TILE_SIZE = 48;
 /** Artwork is authored in CSS pixels: never shrink it to fit the board. */
@@ -7,6 +8,19 @@ export const BATTLE_SCALE = 1;
 export const BATTLE_FOOT_INSET = 5;
 /** Empty drawing space for feet-anchored artwork that overhangs a board edge. */
 export const BATTLE_RENDER_PADDING = 8;
+
+/** Ephemeral UI decoration; deliberately kept out of combat state and saves. */
+export type BattleOverlayState = {
+  movementTargets: readonly Point[];
+  attackTargets: readonly Point[];
+  keyboardFocus: Point | null;
+};
+
+export const EMPTY_BATTLE_OVERLAY: BattleOverlayState = {
+  movementTargets: [],
+  attackTargets: [],
+  keyboardFocus: null
+};
 
 export type BattleVisualPose = {
   x: number;

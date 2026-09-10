@@ -10,7 +10,9 @@ import {
   BATTLE_SCALE,
   BATTLE_TILE_SIZE,
   BATTLE_RENDER_PADDING,
-  battleSurfacePixelSize
+  battleSurfacePixelSize,
+  EMPTY_BATTLE_OVERLAY,
+  type BattleOverlayState
 } from './battleRendering';
 
 /** Rendering-only tactical view. It intentionally consumes snapshots, never rules. */
@@ -22,7 +24,7 @@ export type BattleRuntimeOptions = {
 };
 export type BattleRuntime = {
   init: Promise<void>;
-  update: (state: BattleState) => void;
+  update: (state: BattleState, overlay?: BattleOverlayState) => void;
   destroy: () => void;
 };
 type RuntimePhase = 'initializing' | 'ready' | 'failed' | 'disposed';
@@ -39,6 +41,7 @@ export function createBattleRuntime(
   let destroyed = false;
   let errorReported = false;
   let latestState: BattleState | undefined;
+  let latestOverlay: BattleOverlayState = EMPTY_BATTLE_OVERLAY;
   let player: ReturnType<typeof createPlayerSprite> | undefined;
   let goblin: ReturnType<typeof createGoblinSprite> | undefined;
   let ownedCanvas: HTMLCanvasElement | undefined;
@@ -73,7 +76,7 @@ export function createBattleRuntime(
       reportError(error);
     }
   };
-  const draw = (state: BattleState) => {
+  const draw = (state: BattleState, overlay: BattleOverlayState = EMPTY_BATTLE_OVERLAY) => {
     if (phase !== 'ready' || !player || !goblin) return;
     try {
       const cell = BATTLE_TILE_SIZE;
@@ -104,6 +107,57 @@ export function createBattleRuntime(
         drawGrid(grid);
         stage.addChildAt(grid, 0);
       } else drawGrid(background);
+      const gridLines = stage.children.find((child) => child.label === 'battle-grid-lines') as
+        Graphics | undefined;
+      const drawGridLines = (graphics: Graphics) => {
+        graphics.clear();
+        const width = cell * state.width;
+        const height = cell * state.height;
+        for (let col = 1; col < state.width; col++) graphics.rect(col * cell, 0, 1, height);
+        for (let row = 1; row < state.height; row++) graphics.rect(0, row * cell, width, 1);
+        graphics.fill({ color: '#536b58', alpha: 1 });
+      };
+      if (!gridLines) {
+        const lines = new Graphics();
+        lines.label = 'battle-grid-lines';
+        drawGridLines(lines);
+        stage.addChildAt(lines, 1);
+      } else drawGridLines(gridLines);
+      const targets = stage.children.find((child) => child.label === 'battle-targets') as
+        Graphics | undefined;
+      const drawCellBorder = (graphics: Graphics, point: { col: number; row: number }, color: string, inset = 0) => {
+        const x = point.col * cell + inset;
+        const y = point.row * cell + inset;
+        const size = cell - inset * 2;
+        const thickness = 2;
+        graphics.rect(x, y, size, thickness).rect(x, y + size - thickness, size, thickness)
+          .rect(x, y + thickness, thickness, size - thickness * 2)
+          .rect(x + size - thickness, y + thickness, thickness, size - thickness * 2)
+          .fill({ color, alpha: 1 });
+      };
+      const drawTargets = (graphics: Graphics) => {
+        graphics.clear();
+        for (const point of overlay.movementTargets) drawCellBorder(graphics, point, '#57b86b');
+        // Red is last so it remains meaningful if a future ruleset permits overlap.
+        for (const point of overlay.attackTargets) drawCellBorder(graphics, point, '#e36559');
+      };
+      if (!targets) {
+        const targetLayer = new Graphics();
+        targetLayer.label = 'battle-targets';
+        drawTargets(targetLayer);
+        stage.addChildAt(targetLayer, 2);
+      } else drawTargets(targets);
+      const focus = stage.children.find((child) => child.label === 'battle-focus') as Graphics | undefined;
+      const drawFocus = (graphics: Graphics) => {
+        graphics.clear();
+        if (overlay.keyboardFocus) drawCellBorder(graphics, overlay.keyboardFocus, '#ffffff', 4);
+      };
+      if (!focus) {
+        const focusLayer = new Graphics();
+        focusLayer.label = 'battle-focus';
+        drawFocus(focusLayer);
+        stage.addChildAt(focusLayer, 3);
+      } else drawFocus(focus);
       const border = stage.children.find((child) => child.label === 'battle-border') as
         Graphics | undefined;
       const drawBorder = (graphics: Graphics) => {
@@ -122,7 +176,7 @@ export function createBattleRuntime(
         outline.label = 'battle-border';
         drawBorder(outline);
         // Characters already exist in the stage; keep the border below them.
-        stage.addChildAt(outline, 1);
+        stage.addChildAt(outline, 4);
       } else drawBorder(border);
       const actor = state.combatants.player;
       const enemy = Object.values(state.combatants).find(
@@ -184,7 +238,7 @@ export function createBattleRuntime(
         stage.addChild(player.view, goblin.view);
         host.appendChild(app.canvas);
         phase = 'ready';
-        if (latestState) draw(latestState);
+        if (latestState) draw(latestState, latestOverlay);
       } catch (error) {
         phase = 'failed';
         reportError(error);
@@ -199,15 +253,17 @@ export function createBattleRuntime(
       phase = 'failed';
       reportError(error);
     });
-  const update = (state: BattleState) => {
+  const update = (state: BattleState, overlay: BattleOverlayState = EMPTY_BATTLE_OVERLAY) => {
     if (phase === 'disposed' || phase === 'failed') return;
     latestState = state;
-    if (phase === 'ready') draw(state);
+    latestOverlay = overlay;
+    if (phase === 'ready') draw(state, overlay);
   };
   const destroy = () => {
     if (phase === 'disposed') return;
     phase = 'disposed';
     latestState = undefined;
+    latestOverlay = EMPTY_BATTLE_OVERLAY;
     if (initialized) destroyInitializedApplication();
   };
   return { init, update, destroy };

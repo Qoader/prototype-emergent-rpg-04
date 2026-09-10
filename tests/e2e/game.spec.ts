@@ -44,6 +44,9 @@ test.describe('deterministic tactical battle fixture', () => {
         cellWidth: cellBox.width,
         cellHeight: cellBox.height,
         cellBackground: getComputedStyle(cell).backgroundColor,
+        cellBorder: getComputedStyle(cell).borderColor,
+        cellOutline: getComputedStyle(cell).outlineStyle,
+        cellBoxShadow: getComputedStyle(cell).boxShadow,
         gridZ: getComputedStyle(element.querySelector('.grid')!).zIndex,
         artZ: getComputedStyle(art).zIndex,
         canvasWidth: canvas.width,
@@ -59,7 +62,10 @@ test.describe('deterministic tactical battle fixture', () => {
     expect(metrics.gridOffsetY).toBe(8);
     expect(metrics.cellWidth).toBe(48);
     expect(metrics.cellHeight).toBe(48);
-    expect(metrics.cellBackground).toContain('0.08');
+    expect(metrics.cellBackground).toContain('0)');
+    expect(metrics.cellBorder).toContain('0)');
+    expect(metrics.cellOutline).toBe('none');
+    expect(metrics.cellBoxShadow).toBe('none');
     expect(Number(metrics.gridZ)).toBeGreaterThan(Number(metrics.artZ));
     expect(metrics.canvasWidth).toBe(496);
     expect(metrics.canvasHeight).toBe(496);
@@ -149,6 +155,32 @@ test.describe('deterministic tactical battle fixture', () => {
     await expect(page.locator(':focus')).toHaveAttribute('aria-label', '2, 3');
     await page.keyboard.press('Enter');
     await expect(page.getByText(/MP 2/)).toBeVisible();
+  });
+  test('derives all legal target cells, clears them while inactive, and exposes keyboard focus only', async ({ page }) => {
+    await page.goto('/?battle-fixture-solo');
+    const board = page.locator('.battle-board');
+    await expect(board).toHaveClass(/ready/, { timeout: 8000 });
+    // Player begins at 2,4 with 3 MP. These are every in-bounds, unoccupied
+    // Manhattan destination at distance 1..3; the goblin at 6,4 is not reachable.
+    const movementLabels = await page.locator('[role="gridcell"].reachable').evaluateAll((cells) =>
+      cells.map((cell) => cell.getAttribute('aria-label')?.split(', ').slice(0, 2).join(','))
+    );
+    expect(movementLabels.sort()).toEqual([
+      '0,3', '0,4', '0,5', '1,2', '1,3', '1,4', '1,5', '1,6', '2,1', '2,2', '2,3', '2,5', '2,6', '2,7',
+      '3,2', '3,3', '3,4', '3,5', '3,6', '4,3', '4,4', '4,5', '5,4'
+    ].sort());
+    await expect(page.locator('[role="gridcell"].attackable')).toHaveCount(0);
+
+    const player = page.getByRole('gridcell', { name: '2, 4, player' });
+    await player.focus();
+    await expect(player).toHaveClass(/focused/);
+    await expect(page.locator('[role="gridcell"].preview')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Center' }).focus();
+    await expect(page.locator('[role="gridcell"].focused')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'End Turn' }).click();
+    await expect(page.locator('[role="gridcell"].reachable')).toHaveCount(0);
+    await expect(page.locator('[role="gridcell"].attackable')).toHaveCount(0);
   });
   test('supports narrow layout', async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 568 });
