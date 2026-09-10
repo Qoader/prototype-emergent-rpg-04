@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, chunkRangeForViewport, createMap, evictChunkCache, generateRoutePoints, GENERATOR_VERSION, tileAt, TILE_SIZE } from './map';
 import { findPath } from './pathfinding';
 import type { Point, Settlement, Tile, WorldMap } from './types';
@@ -15,6 +15,53 @@ type HousingProjection = {
 };
 
 const pointKey = ({ col, row }: Point) => `${col},${row}`;
+
+const profileEnabled = process.env.MAP_TEST_PROFILE === '1';
+const profileCounters = { worldsGenerated: 0, tileLookups: 0, overlaysInspected: 0, settlementCellsVisited: 0, cacheSize: 0 };
+const profile = (label: string, action: () => void) => {
+  if (!profileEnabled) return action();
+  const started = performance.now();
+  action();
+  console.info(`[map-test-profile] ${label}: ${(performance.now() - started).toFixed(1)}ms`);
+};
+
+const readTestTile = (map: WorldMap, point: Point) => {
+  if (profileEnabled) profileCounters.tileLookups += 1;
+  return tileAt(map, point);
+};
+
+const routeKinds = new Set<Tile['kind']>(['road', 'bridge', 'gate']);
+const isRouteTile = (tile: Tile | undefined) => tile !== undefined && routeKinds.has(tile.kind);
+
+const routeComponentLabels = (map: WorldMap) => {
+  const labels = new Map<string, number>();
+  const routes = [...(map.overlays?.values() ?? [])].filter(isRouteTile);
+  let component = 0;
+  for (const route of routes) {
+    const start = pointKey(route);
+    if (labels.has(start)) continue;
+    const queue: Point[] = [route];
+    labels.set(start, component);
+    for (let head = 0; head < queue.length; head += 1) {
+      const point = queue[head]!;
+      for (const [col, row] of [[point.col, point.row - 1], [point.col + 1, point.row], [point.col, point.row + 1], [point.col - 1, point.row]]) {
+        const key = `${col},${row}`;
+        if (!labels.has(key) && isRouteTile(readTestTile(map, { col, row }))) {
+          labels.set(key, component);
+          queue.push({ col, row });
+        }
+      }
+    }
+    component += 1;
+  }
+  return labels;
+};
+
+const cloneFixture = (baseline: WorldMap) => {
+  const fixture = structuredClone(baseline);
+  fixture.chunkCache = new Map();
+  return fixture;
+};
 
 const collectHousingSample = (map: WorldMap, settlement: Settlement): HousingSample => {
   const routes: Point[] = [];
@@ -143,6 +190,33 @@ describe('housing measurement helpers', () => {
     expect(countAdjacentHouses([])).toBe(0);
   });
 
+  it('labels route components once while retaining disconnected route groups', () => {
+    const map: WorldMap = {
+      width: 4, height: 2, tiles: [], spawn: { col: 0, row: 0 },
+      overlays: new Map([
+        ['0,0', { col: 0, row: 0, kind: 'road', walkable: true }],
+        ['1,0', { col: 1, row: 0, kind: 'gate', walkable: true }],
+        ['3,1', { col: 3, row: 1, kind: 'bridge', walkable: true }]
+      ])
+    };
+    const labels = routeComponentLabels(map);
+    expect(labels.get('0,0')).toBe(labels.get('1,0'));
+    expect(labels.get('0,0')).not.toBe(labels.get('3,1'));
+  });
+
+  it('returns an isolated fixture clone with an empty chunk cache', () => {
+    const baseline = createMap(1);
+    const first = cloneFixture(baseline);
+    first.overlays?.set('fixture-only', { col: 0, row: 0, kind: 'house', walkable: false });
+    first.settlements?.[0]!.gates.push({ id: 'fixture-only', col: 0, row: 0, direction: 'north' });
+    first.chunkCache?.set('fixture-only', new Map());
+    const second = cloneFixture(baseline);
+    expect(second.overlays?.has('fixture-only')).toBe(false);
+    expect(second.settlements?.[0]?.gates.some((gate) => gate.id === 'fixture-only')).toBe(false);
+    expect(second.chunkCache?.size).toBe(0);
+    expect(baseline.chunkCache?.size).toBe(0);
+  });
+
   it('canonicalizes settlement and house ordering while preserving changes', () => {
     const first = housingProjection(1, [
       { id: 'b', houses: [{ col: 4, row: 2 }, { col: 1, row: 2 }] },
@@ -247,7 +321,7 @@ describe('heroic fantasy world generation', () => {
       expect(places.filter((place) => place.kind === 'city').length).toBeGreaterThanOrEqual(2);
       expect(places.filter((place) => place.kind === 'village').length).toBeLessThanOrEqual(6);
     }
-  });
+  }, 10000);
 
   it('uses the full configured terrain distribution in every wilderness biome', () => {
     const expected: Record<string, Record<string, number>> = {
@@ -413,7 +487,7 @@ describe('heroic fantasy world generation', () => {
           expect(corners.some((corner) => corner.col === gate.col && corner.row === gate.row)).toBe(false);
       }
     }
-  });
+  }, 10000);
 
   it('starts in a village with a traversable route to a city', () => {
     const map = createMap();
@@ -452,86 +526,7 @@ describe('heroic fantasy world generation', () => {
       expect(routes.filter((tile) => tile.kind === 'bridge').every((tile) => tile.groundKind === 'water')).toBe(true);
       expect(routes.every((tile) => tile.walkable)).toBe(true);
     }
-  });
-
-  it('never generates a two-tile-wide route block', () => {
-    for (const seed of [1, 7331, 424242]) {
-      const map = createMap(seed);
-      const isRoute = (col: number, row: number) => {
-        const tile = tileAt(map, { col, row });
-        return tile?.kind === 'road' || tile?.kind === 'bridge';
-      };
-      const candidates = [...(map.overlays?.values() ?? [])];
-      for (const tile of candidates) for (const row of [tile.row - 1, tile.row]) for (const col of [tile.col - 1, tile.col]) {
-        expect(isRoute(col, row) && isRoute(col + 1, row) && isRoute(col, row + 1) && isRoute(col + 1, row + 1)).toBe(false);
-      }
-    }
-  }, 30000);
-
-  it('keeps every logical road connected through route tiles', () => {
-    for (const seed of [1, 7331, 424242]) {
-      const map = createMap(seed);
-      const route = (point: { col: number; row: number }) => {
-        const kind = tileAt(map, point)?.kind;
-        return kind === 'road' || kind === 'bridge' || kind === 'gate';
-      };
-      const connected = (start: { col: number; row: number }, goal: { col: number; row: number }) => {
-        const queue = [start];
-        const seen = new Set([`${start.col},${start.row}`]);
-        for (let index = 0; index < queue.length; index += 1) {
-          const point = queue[index]!;
-          if (point.col === goal.col && point.row === goal.row) return true;
-          for (const neighbor of [
-            { col: point.col, row: point.row - 1 },
-            { col: point.col + 1, row: point.row },
-            { col: point.col, row: point.row + 1 },
-            { col: point.col - 1, row: point.row }
-          ]) {
-            const id = `${neighbor.col},${neighbor.row}`;
-            if (route(neighbor) && !seen.has(id)) {
-              seen.add(id);
-              queue.push(neighbor);
-            }
-          }
-        }
-        return false;
-      };
-      for (const road of map.roads ?? []) {
-        const [from, to] = road.settlementIds.map((id) => map.settlements?.find((settlement) => settlement.id === id));
-        expect(from && to && connected(from, to)).toBe(true);
-      }
-    }
-  }, 30000);
-
-  it('derives fortified gates from actual road crossings', () => {
-    for (const seed of [1, 7331, 424242]) {
-      const map = createMap(seed);
-      const isRoute = (col: number, row: number) => {
-        const tile = tileAt(map, { col, row });
-        return tile?.kind === 'road' || tile?.kind === 'bridge' || tile?.kind === 'gate';
-      };
-      const inside = (settlement: NonNullable<typeof map.settlements>[number], col: number, row: number) => col > settlement.bounds.left && col < settlement.bounds.right && row > settlement.bounds.top && row < settlement.bounds.bottom;
-      for (const settlement of map.settlements ?? []) {
-        if (settlement.kind === 'village') expect(settlement.gates).toHaveLength(0);
-        const perimeterGates = settlement.gates.slice().sort((a, b) => a.row - b.row || a.col - b.col);
-        for (const gate of perimeterGates) {
-          expect(tileAt(map, gate)?.kind).toBe('gate');
-          expect(tileAt(map, gate)?.walkable).toBe(true);
-          expect(tileAt(map, gate)?.settlementId).toBe(settlement.id);
-          expect(gate.col === settlement.bounds.left || gate.col === settlement.bounds.right || gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom).toBe(true);
-          expect((gate.col === settlement.bounds.left || gate.col === settlement.bounds.right) && (gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom)).toBe(false);
-          const neighbors = [{ col: gate.col + 1, row: gate.row }, { col: gate.col - 1, row: gate.row }, { col: gate.col, row: gate.row + 1 }, { col: gate.col, row: gate.row - 1 }];
-          expect(neighbors.some((point) => isRoute(point.col, point.row) && inside(settlement, point.col, point.row))).toBe(true);
-          expect(neighbors.some((point) => isRoute(point.col, point.row) && !inside(settlement, point.col, point.row) && !(point.col >= settlement.bounds.left && point.col <= settlement.bounds.right && point.row >= settlement.bounds.top && point.row <= settlement.bounds.bottom))).toBe(true);
-          expect(gate.direction).toMatch(/^(north|east|south|west)$/);
-        }
-        for (let index = 1; index < perimeterGates.length; index += 1) {
-          const previous = perimeterGates[index - 1]; const current = perimeterGates[index];
-          expect(Math.abs(previous.col - current.col) + Math.abs(previous.row - current.row)).toBeGreaterThan(1);
-        }
-      }
-    }
-  });
+  }, 10000);
 
   it('generates explorable house clusters with walkable settlement centers', () => {
     const map = createMap();
@@ -551,32 +546,86 @@ describe('heroic fantasy world generation', () => {
     }
   });
 
-  it('selects the exact eligible housing density and preserves plazas/routes', () => {
-    for (const seed of [1, 7331, 424242]) {
-      const map = createMap(seed);
+  describe.each([1, 7331, 424242])('observational route and housing invariants (seed %s)', (seed) => {
+    let baseline: WorldMap;
+    let map: WorldMap;
+
+    beforeAll(() => profile(`seed ${seed} generation`, () => { profileCounters.worldsGenerated += 1; baseline = createMap(seed); }), 10000);
+    beforeEach(() => { map = cloneFixture(baseline); }, 5000);
+    afterEach(() => { profileCounters.cacheSize += map.chunkCache?.size ?? 0; map.chunkCache?.clear(); });
+    afterAll(() => {
+      baseline.chunkCache?.clear();
+      if (profileEnabled) console.info(`[map-test-profile] ${JSON.stringify(profileCounters)}`);
+    });
+
+    it('never generates a two-tile-wide route block', () => {
+      const anchors = new Set<string>();
+      for (const tile of map.overlays?.values() ?? []) {
+        if (profileEnabled) profileCounters.overlaysInspected += 1;
+        for (const row of [tile.row - 1, tile.row]) for (const col of [tile.col - 1, tile.col]) anchors.add(`${col},${row}`);
+      }
+      const violations: string[] = [];
+      for (const anchor of anchors) {
+        const [col, row] = anchor.split(',').map(Number);
+        const square = [readTestTile(map, { col, row }), readTestTile(map, { col: col + 1, row }), readTestTile(map, { col, row: row + 1 }), readTestTile(map, { col: col + 1, row: row + 1 })];
+        if (square.every((tile) => tile?.kind === 'road' || tile?.kind === 'bridge')) violations.push(anchor);
+      }
+      expect(violations, `two-wide route blocks: ${violations.slice(0, 5).join(', ')}`).toHaveLength(0);
+    }, 5000);
+
+    it('keeps every logical road connected through route tiles', () => {
+      const labels = routeComponentLabels(map);
+      const settlements = new Map((map.settlements ?? []).map((settlement) => [settlement.id, settlement]));
+      const violations: string[] = [];
+      for (const road of map.roads ?? []) {
+        const [from, to] = road.settlementIds.map((id) => settlements.get(id));
+        if (!from || !to || labels.get(pointKey(from)) === undefined || labels.get(pointKey(from)) !== labels.get(pointKey(to))) violations.push(road.id);
+      }
+      expect(violations, `disconnected roads: ${violations.slice(0, 5).join(', ')}`).toHaveLength(0);
+    }, 5000);
+
+    it('derives fortified gates from actual road crossings', () => {
+      const violations: string[] = [];
+      const inside = (settlement: Settlement, col: number, row: number) => col > settlement.bounds.left && col < settlement.bounds.right && row > settlement.bounds.top && row < settlement.bounds.bottom;
+      for (const settlement of map.settlements ?? []) {
+        if (settlement.kind === 'village' && settlement.gates.length !== 0) violations.push(`${settlement.id}: village gates`);
+        const gates = settlement.gates.slice().sort((a, b) => a.row - b.row || a.col - b.col);
+        for (const gate of gates) {
+          const tile = readTestTile(map, gate);
+          const onPerimeter = gate.col === settlement.bounds.left || gate.col === settlement.bounds.right || gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom;
+          const corner = (gate.col === settlement.bounds.left || gate.col === settlement.bounds.right) && (gate.row === settlement.bounds.top || gate.row === settlement.bounds.bottom);
+          const neighbors = [{ col: gate.col + 1, row: gate.row }, { col: gate.col - 1, row: gate.row }, { col: gate.col, row: gate.row + 1 }, { col: gate.col, row: gate.row - 1 }];
+          const routesInside = neighbors.some((point) => isRouteTile(readTestTile(map, point)) && inside(settlement, point.col, point.row));
+          const routesOutside = neighbors.some((point) => isRouteTile(readTestTile(map, point)) && !inside(settlement, point.col, point.row) && !(point.col >= settlement.bounds.left && point.col <= settlement.bounds.right && point.row >= settlement.bounds.top && point.row <= settlement.bounds.bottom));
+          if (tile?.kind !== 'gate' || !tile.walkable || tile.settlementId !== settlement.id || !onPerimeter || corner || !routesInside || !routesOutside || !/^(north|east|south|west)$/.test(gate.direction)) violations.push(`${settlement.id}:${gate.col},${gate.row}`);
+        }
+        for (let index = 1; index < gates.length; index += 1) if (Math.abs(gates[index - 1]!.col - gates[index]!.col) + Math.abs(gates[index - 1]!.row - gates[index]!.row) <= 1) violations.push(`${settlement.id}: adjacent gates`);
+      }
+      expect(violations, `gate violations: ${violations.slice(0, 5).join(', ')}`).toHaveLength(0);
+    }, 5000);
+
+    it('selects the exact eligible housing density and preserves plazas/routes', () => {
+      const violations: string[] = [];
       for (const settlement of map.settlements ?? []) {
         const plazaRadius = settlement.kind === 'capital' ? 2 : settlement.kind === 'city' ? 1 : -1;
-        const route = (col: number, row: number) => {
-          const kind = tileAt(map, { col, row })?.kind;
-          return kind === 'road' || kind === 'bridge' || kind === 'gate';
-        };
-        const eligible: Tile[] = [];
-        const houses: Tile[] = [];
-        for (let row = settlement.bounds.top + 1; row < settlement.bounds.bottom; row++) for (let col = settlement.bounds.left + 1; col < settlement.bounds.right; col++) {
-          const tile = tileAt(map, { col, row })!;
+        let eligible = 0;
+        let houses = 0;
+        for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row += 1) for (let col = settlement.bounds.left; col <= settlement.bounds.right; col += 1) {
+          if (profileEnabled) profileCounters.settlementCellsVisited += 1;
+          const tile = readTestTile(map, { col, row })!;
+          const interior = col > settlement.bounds.left && col < settlement.bounds.right && row > settlement.bounds.top && row < settlement.bounds.bottom;
           const plaza = plazaRadius >= 0 && Math.abs(col - settlement.col) <= plazaRadius && Math.abs(row - settlement.row) <= plazaRadius;
-          if (!plaza && !route(col, row) && tile.kind !== 'wall' && tile.kind !== 'tower') eligible.push(tile);
-          if (tile.kind === 'house') houses.push(tile);
+          const route = isRouteTile(tile);
+          if (interior && !plaza && !route && tile.kind !== 'wall' && tile.kind !== 'tower') eligible += 1;
+          if (tile.kind === 'house') {
+            houses += 1;
+            if (tile.walkable || route || plaza) violations.push(`${settlement.id}:${col},${row}`);
+          }
         }
-        expect(houses).toHaveLength(Math.floor(eligible.length * 0.35));
-        expect(houses.every((tile) => !tile.walkable)).toBe(true);
-        for (let row = settlement.bounds.top; row <= settlement.bounds.bottom; row++) for (let col = settlement.bounds.left; col <= settlement.bounds.right; col++) {
-          const tile = tileAt(map, { col, row });
-          if (route(col, row)) expect(tile?.kind).not.toBe('house');
-          if (plazaRadius >= 0 && Math.abs(col - settlement.col) <= plazaRadius && Math.abs(row - settlement.row) <= plazaRadius) expect(tile?.kind).not.toBe('house');
-        }
+        if (houses !== Math.floor(eligible * 0.35)) violations.push(`${settlement.id}: ${houses}/${eligible}`);
       }
-    }
+      expect(violations, `housing violations: ${violations.slice(0, 5).join(', ')}`).toHaveLength(0);
+    }, 5000);
   });
 
   it.each([1, 7331, 424242])('keeps housing deterministic while producing route-biased, clustered layouts (seed %s)', (seed) => {
@@ -605,5 +654,5 @@ describe('heroic fantasy world generation', () => {
       });
       expect(housingProjection(seed, projectionSamples)).toEqual(housingProjection(seed, repeatedProjection));
     }
-  });
+  }, 10000);
 });

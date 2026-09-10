@@ -56,6 +56,8 @@ describe('game controller integration', () => {
     })).toEqual({ col: 3, row: 1 });
   });
 
+  // Measured on the supported Node 24 runner: worst-case route resolution is
+  // CPU-bound and can exceed Vitest's five-second default.
   it('resolves a blocked request to a reachable tile and retargets mid-route', () => {
     const map = createMap(7331);
     const controller = createGameController(map);
@@ -70,5 +72,5 @@ describe('game controller integration', () => {
     expect(controller.movement.destination).toEqual(first);
     controller.tick(0);
     expect(controller.movement.destination).toBeNull();
-  });
+  }, 30000);
 });

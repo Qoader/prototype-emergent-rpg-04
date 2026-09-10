@@ -8,6 +8,10 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   ...svelte.configs['flat/recommended'],
   {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { console: 'readonly', process: 'readonly' } }
+  },
+  {
     files: ['**/*.svelte'],
     languageOptions: {
       parserOptions: { parser: tseslint.parser },
