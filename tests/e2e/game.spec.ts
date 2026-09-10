@@ -28,26 +28,112 @@ test.describe('deterministic tactical battle fixture', () => {
       const artBox = art.getBoundingClientRect();
       const cell = element.querySelector('.grid button')!;
       const canvas = art.querySelector('canvas')!;
+      const grid = element.querySelector('.grid')!;
+      const gridBox = grid.getBoundingClientRect();
+      const cellBox = cell.getBoundingClientRect();
+      const transform = new DOMMatrixReadOnly(
+        getComputedStyle(element.querySelector('.board-content')!).transform
+      );
       return {
         boardWidth: boardBox.width,
         boardHeight: boardBox.height,
         artWidth: artBox.width,
         artHeight: artBox.height,
+        gridOffsetX: gridBox.left - artBox.left,
+        gridOffsetY: gridBox.top - artBox.top,
+        cellWidth: cellBox.width,
+        cellHeight: cellBox.height,
         cellBackground: getComputedStyle(cell).backgroundColor,
         gridZ: getComputedStyle(element.querySelector('.grid')!).zIndex,
         artZ: getComputedStyle(art).zIndex,
         canvasWidth: canvas.width,
         canvasHeight: canvas.height,
-        renderedImageBytes: canvas.toDataURL('image/png').length
+        canvasCssWidth: canvas.getBoundingClientRect().width,
+        canvasCssHeight: canvas.getBoundingClientRect().height,
+        transform: { a: transform.a, d: transform.d, x: transform.m41, y: transform.m42 }
       };
     });
-    expect(metrics.artWidth).toBeGreaterThanOrEqual(480);
-    expect(metrics.artHeight).toBeGreaterThanOrEqual(480);
+    expect(metrics.artWidth).toBe(496);
+    expect(metrics.artHeight).toBe(496);
+    expect(metrics.gridOffsetX).toBe(8);
+    expect(metrics.gridOffsetY).toBe(8);
+    expect(metrics.cellWidth).toBe(48);
+    expect(metrics.cellHeight).toBe(48);
     expect(metrics.cellBackground).toContain('0.08');
     expect(Number(metrics.gridZ)).toBeGreaterThan(Number(metrics.artZ));
-    expect(metrics.canvasWidth).toBeGreaterThanOrEqual(480);
-    expect(metrics.canvasHeight).toBeGreaterThanOrEqual(480);
-    expect(metrics.renderedImageBytes).toBeGreaterThan(1000);
+    expect(metrics.canvasWidth).toBe(496);
+    expect(metrics.canvasHeight).toBe(496);
+    expect(metrics.canvasCssWidth).toBe(496);
+    expect(metrics.canvasCssHeight).toBe(496);
+    expect(metrics.transform.a).toBe(1);
+    expect(metrics.transform.d).toBe(1);
+    expect(Number.isInteger(metrics.transform.x)).toBe(true);
+    expect(Number.isInteger(metrics.transform.y)).toBe(true);
+  });
+
+  test('centers the padded surface on combatants and reveals an edge focus target', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto('/?battle-fixture-solo');
+    const board = page.locator('.battle-board');
+    await expect(board).toHaveClass(/ready/, { timeout: 8000 });
+
+    const player = page.getByRole('gridcell', { name: '2, 4, player' });
+    await player.focus();
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowUp');
+    await expect(page.locator(':focus')).toHaveAttribute('aria-label', '0, 0');
+
+    const edge = await board.evaluate((element) => {
+      const viewport = element as HTMLElement;
+      const transform = new DOMMatrixReadOnly(
+        getComputedStyle(element.querySelector('.board-content')!).transform
+      );
+      const visible = { left: -transform.m41, top: -transform.m42 };
+      return {
+        camera: { x: transform.m41, y: transform.m42 },
+        viewport: { width: viewport.clientWidth, height: viewport.clientHeight },
+        visible,
+        // Cell (0, 0) plus its 8px drawing allowance is [0, 64] on each axis.
+        targetVisible:
+          visible.left <= 0 && visible.left + viewport.clientWidth >= 64 &&
+          visible.top <= 0 && visible.top + viewport.clientHeight >= 64
+      };
+    });
+    expect(Number.isInteger(edge.camera.x)).toBe(true);
+    expect(Number.isInteger(edge.camera.y)).toBe(true);
+    expect(edge.targetVisible).toBe(true);
+
+    await page.getByRole('button', { name: 'Center' }).click();
+    const centered = await board.evaluate((element) => {
+      const viewport = element as HTMLElement;
+      const transform = new DOMMatrixReadOnly(
+        getComputedStyle(element.querySelector('.board-content')!).transform
+      );
+      const positions = [...element.querySelectorAll('.grid button.player, .grid button.goblin')].map((button) => {
+        const [col, row] = (button.getAttribute('aria-label') ?? '').split(', ');
+        return { col: Number(col), row: Number(row) };
+      });
+      const left = Math.min(...positions.map((position) => position.col));
+      const right = Math.max(...positions.map((position) => position.col + 1));
+      const top = Math.min(...positions.map((position) => position.row));
+      const bottom = Math.max(...positions.map((position) => position.row + 1));
+      const clamp = (requested: number, viewportExtent: number, surfaceExtent: number) =>
+        viewportExtent >= surfaceExtent
+          ? Math.round((viewportExtent - surfaceExtent) / 2)
+          : Math.max(viewportExtent - surfaceExtent, Math.min(0, Math.round(requested)));
+      return {
+        camera: { x: transform.m41, y: transform.m42 },
+        expected: {
+          x: clamp(viewport.clientWidth / 2 - (8 + ((left + right) / 2) * 48), viewport.clientWidth, 496),
+          y: clamp(viewport.clientHeight / 2 - (8 + ((top + bottom) / 2) * 48), viewport.clientHeight, 496)
+        }
+      };
+    });
+    expect(centered.camera).toEqual(centered.expected);
   });
 
   test('renders a reactive battle and supports keyboard movement', async ({ page }) => {

@@ -4,7 +4,13 @@
   import { onMount, tick } from 'svelte';
   import { createBattleRuntime } from '../game/battleRuntime';
   import { reachable } from '../game/battle/grid';
-  import { BATTLE_TILE_SIZE } from '../game/battleRendering';
+  import {
+    BATTLE_RENDER_PADDING,
+    BATTLE_TILE_SIZE,
+    battleSurfacePixelSize,
+    clampBattleCameraAxis,
+    revealBattleCameraAxis
+  } from '../game/battleRendering';
   import { canAttack } from '../game/battle/legality';
   export let battle: GameSnapshot['battle'];
   export let battleBusy: boolean;
@@ -30,14 +36,17 @@
   let previewPath: string[] = [];
   $: boardWidth = battle ? battle.width * BATTLE_TILE_SIZE : BATTLE_TILE_SIZE * 10;
   $: boardHeight = battle ? battle.height * BATTLE_TILE_SIZE : BATTLE_TILE_SIZE * 10;
+  $: surface = battle
+    ? battleSurfacePixelSize(battle)
+    : { width: boardWidth + BATTLE_RENDER_PADDING * 2, height: boardHeight + BATTLE_RENDER_PADDING * 2 };
+  $: surfaceWidth = surface.width;
+  $: surfaceHeight = surface.height;
   const clampCamera = () => {
     if (!boardViewport) return;
     const w = boardViewport.clientWidth;
     const h = boardViewport.clientHeight;
-    cameraX =
-      w >= boardWidth ? (w - boardWidth) / 2 : Math.max(w - boardWidth, Math.min(0, cameraX));
-    cameraY =
-      h >= boardHeight ? (h - boardHeight) / 2 : Math.max(h - boardHeight, Math.min(0, cameraY));
+    cameraX = clampBattleCameraAxis(cameraX, w, surfaceWidth);
+    cameraY = clampBattleCameraAxis(cameraY, h, surfaceHeight);
   };
   const centerCombatants = () => {
     if (!battle || !boardViewport) return;
@@ -49,8 +58,8 @@
       const bottom = Math.max(...actors.map((c) => c.position.row + 1));
       const col = (left + right) / 2;
       const row = (top + bottom) / 2;
-      cameraX = boardViewport.clientWidth / 2 - col * BATTLE_TILE_SIZE;
-      cameraY = boardViewport.clientHeight / 2 - row * BATTLE_TILE_SIZE;
+      cameraX = boardViewport.clientWidth / 2 - (BATTLE_RENDER_PADDING + col * BATTLE_TILE_SIZE);
+      cameraY = boardViewport.clientHeight / 2 - (BATTLE_RENDER_PADDING + row * BATTLE_TILE_SIZE);
     }
     clampCamera();
   };
@@ -100,15 +109,12 @@
     const row = Math.floor(index / battle.width);
     const w = boardViewport.clientWidth;
     const h = boardViewport.clientHeight;
-    const left = -cameraX;
-    const top = -cameraY;
-    if (col * BATTLE_TILE_SIZE < left) cameraX = Math.min(0, -col * BATTLE_TILE_SIZE);
-    else if ((col + 1) * BATTLE_TILE_SIZE > left + w)
-      cameraX = Math.max(w - boardWidth, -(col + 1) * BATTLE_TILE_SIZE + w);
-    if (row * BATTLE_TILE_SIZE < top) cameraY = Math.min(0, -row * BATTLE_TILE_SIZE);
-    else if ((row + 1) * BATTLE_TILE_SIZE > top + h)
-      cameraY = Math.max(h - boardHeight, -(row + 1) * BATTLE_TILE_SIZE + h);
-    clampCamera();
+    const targetLeft = Math.max(0, BATTLE_RENDER_PADDING + col * BATTLE_TILE_SIZE - BATTLE_RENDER_PADDING);
+    const targetRight = Math.min(surfaceWidth, BATTLE_RENDER_PADDING + (col + 1) * BATTLE_TILE_SIZE + BATTLE_RENDER_PADDING);
+    const targetTop = Math.max(0, BATTLE_RENDER_PADDING + row * BATTLE_TILE_SIZE - BATTLE_RENDER_PADDING);
+    const targetBottom = Math.min(surfaceHeight, BATTLE_RENDER_PADDING + (row + 1) * BATTLE_TILE_SIZE + BATTLE_RENDER_PADDING);
+    cameraX = revealBattleCameraAxis(cameraX, w, surfaceWidth, targetLeft, targetRight);
+    cameraY = revealBattleCameraAxis(cameraY, h, surfaceHeight, targetTop, targetBottom);
   };
   let focusIndex = 0;
   let lastActiveId: string | undefined;
@@ -138,21 +144,23 @@
     if (active) revealFocus(active.position.row * battle.width + active.position.col);
   }
   onMount(() => {
-    let centerX = 240;
-    let centerY = 240;
+    let previousWidth = 0;
+    let previousHeight = 0;
     const observer = new ResizeObserver(() => {
       if (!boardViewport) return;
       const w = boardViewport.clientWidth;
       const h = boardViewport.clientHeight;
+      const centerX = previousWidth / 2 - cameraX;
+      const centerY = previousHeight / 2 - cameraY;
       cameraX = w / 2 - centerX;
       cameraY = h / 2 - centerY;
       clampCamera();
-      centerX = -cameraX + w / 2;
-      centerY = -cameraY + h / 2;
+      previousWidth = w;
+      previousHeight = h;
     });
     if (boardViewport) {
-      centerX = -cameraX + boardViewport.clientWidth / 2;
-      centerY = -cameraY + boardViewport.clientHeight / 2;
+      previousWidth = boardViewport.clientWidth;
+      previousHeight = boardViewport.clientHeight;
       observer.observe(boardViewport);
     }
     return () => observer.disconnect();
@@ -304,7 +312,7 @@
       >
         <div
           class="board-content"
-          style={`width:${boardWidth}px;height:${boardHeight}px;transform:translate(${cameraX}px,${cameraY}px)`}
+          style={`width:${surfaceWidth}px;height:${surfaceHeight}px;transform:translate(${cameraX}px,${cameraY}px)`}
         >
           <div class="battle-art" bind:this={battleHost} aria-hidden="true"></div>
           <div
@@ -416,6 +424,7 @@
     height: 100%;
     pointer-events: none;
     z-index: 0;
+    image-rendering: pixelated;
   }
   .battle-header {
     display: grid;
@@ -488,14 +497,16 @@
   .board-content::after {
     content: '';
     position: absolute;
-    inset: 0;
+    inset: 8px;
     border: 2px solid #d4b56a;
     pointer-events: none;
     z-index: 2;
   }
+  .battle-board.ready .board-content::after { display: none; }
   .grid {
     position: absolute;
-    inset: 0;
+    left: 8px;
+    top: 8px;
     z-index: 1;
     display: grid;
     grid-template-columns: repeat(var(--cols), 48px);

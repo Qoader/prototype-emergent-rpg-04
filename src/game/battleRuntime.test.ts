@@ -18,6 +18,7 @@ function fakeApplication(
 ) {
   let destroyCount = 0;
   let renderCount = 0;
+  const resized: Array<{ width: number; height: number }> = [];
   let destroyArgs: unknown[] = [];
   let destroyed = false;
   const canvas = { remove: () => undefined };
@@ -28,6 +29,7 @@ function fakeApplication(
       return canvas;
     },
     init: () => initialization,
+    renderer: { resize: (width: number, height: number) => resized.push({ width, height }) },
     render: () => { renderCount += 1; if (renderFailure) throw new Error('render failed'); },
     destroy: (...args: unknown[]) => {
       destroyCount += 1;
@@ -41,6 +43,7 @@ function fakeApplication(
     canvas,
     get destroyCount() { return destroyCount; },
     get renderCount() { return renderCount; },
+    get resized() { return resized; },
     get destroyArgs() { return destroyArgs; }
   };
 }
@@ -114,6 +117,51 @@ describe('battle runtime asynchronous ownership', () => {
     runtime.update(createBattle('goblin'));
     runtime.update(createBattle('goblin'));
     expect(ready).toEqual([1]);
+    runtime.destroy();
+  });
+
+  it('composes a padded, unit-scale scene with integer sprite coordinates', async () => {
+    const gate = deferred();
+    const fake = fakeApplication(gate.promise);
+    const runtime = createBattleRuntime(testHost().value, { applicationFactory: () => fake.app as never });
+    const state = createBattle('goblin');
+    state.visual = {
+      player: { x: 2.51, y: 4.5, facing: 'east', moving: true, elapsed: 0.2 },
+      goblin: { x: 6.49, y: 4.5, facing: 'west', moving: false }
+    };
+    runtime.update(state);
+    gate.resolve();
+    await runtime.init;
+    const stage = fake.app.stage.children[0] as Container;
+    expect(stage.position).toMatchObject({ x: 8, y: 8 });
+    expect(stage.children.map((child) => child.label)).toEqual([
+      'battle-grid',
+      'battle-border',
+      null,
+      null
+    ]);
+    const [player, goblin] = stage.children.slice(2) as Container[];
+    expect(player.scale).toMatchObject({ x: 1, y: 1 });
+    expect(goblin.scale).toMatchObject({ x: 1, y: 1 });
+    expect(Number.isInteger(player.position.x)).toBe(true);
+    expect(Number.isInteger(player.position.y)).toBe(true);
+    expect(player.position).toMatchObject({ x: 120, y: 235 });
+    expect(goblin.position).toMatchObject({ x: 312, y: 235 });
+    // Rendering may quantize the displayed point, but must not feed that
+    // quantization back into simulation state.
+    expect(state.visual).toEqual({
+      player: { x: 2.51, y: 4.5, facing: 'east', moving: true, elapsed: 0.2 },
+      goblin: { x: 6.49, y: 4.5, facing: 'west', moving: false }
+    });
+    expect(fake.resized).toEqual([{ width: 496, height: 496 }]);
+
+    state.visual.player = { x: 2.25, y: 4.5, facing: 'north', moving: false };
+    state.visual.goblin = { x: 6.75, y: 4.5, facing: 'south', moving: true, elapsed: 0.3 };
+    runtime.update(state);
+    expect(player.scale).toMatchObject({ x: 1, y: 1 });
+    expect(goblin.scale).toMatchObject({ x: 1, y: 1 });
+    expect(player.position).toMatchObject({ x: 108, y: 235 });
+    expect(goblin.position).toMatchObject({ x: 324, y: 235 });
     runtime.destroy();
   });
 

@@ -8,7 +8,9 @@ import {
   combatantPose,
   spriteFootPosition,
   BATTLE_SCALE,
-  BATTLE_TILE_SIZE
+  BATTLE_TILE_SIZE,
+  BATTLE_RENDER_PADDING,
+  battleSurfacePixelSize
 } from './battleRendering';
 
 /** Rendering-only tactical view. It intentionally consumes snapshots, never rules. */
@@ -75,7 +77,10 @@ export function createBattleRuntime(
     if (phase !== 'ready' || !player || !goblin) return;
     try {
       const cell = BATTLE_TILE_SIZE;
-      stage.position.set(0, 0);
+      // Board-local drawing stays independent of its protective surface margin.
+      stage.position.set(BATTLE_RENDER_PADDING, BATTLE_RENDER_PADDING);
+      const surface = battleSurfacePixelSize(state);
+      app.renderer.resize(surface.width, surface.height);
       const drawGrid = (graphics: Graphics) => {
         graphics
           .clear()
@@ -99,6 +104,26 @@ export function createBattleRuntime(
         drawGrid(grid);
         stage.addChildAt(grid, 0);
       } else drawGrid(background);
+      const border = stage.children.find((child) => child.label === 'battle-border') as
+        Graphics | undefined;
+      const drawBorder = (graphics: Graphics) => {
+        const width = cell * state.width;
+        const height = cell * state.height;
+        graphics
+          .clear()
+          .rect(0, 0, width, 2)
+          .rect(0, height - 2, width, 2)
+          .rect(0, 0, 2, height)
+          .rect(width - 2, 0, 2, height)
+          .fill({ color: '#d4b56a' });
+      };
+      if (!border) {
+        const outline = new Graphics();
+        outline.label = 'battle-border';
+        drawBorder(outline);
+        // Characters already exist in the stage; keep the border below them.
+        stage.addChildAt(outline, 1);
+      } else drawBorder(border);
       const actor = state.combatants.player;
       const enemy = Object.values(state.combatants).find(
         (combatant) => combatant.side === 'goblin'
@@ -140,7 +165,7 @@ export function createBattleRuntime(
   };
   const init = Promise.resolve()
     .then(() =>
-      app.init({ backgroundAlpha: 0, antialias: false, autoStart: false, resizeTo: host })
+      app.init({ backgroundAlpha: 0, antialias: false, autoStart: false, resolution: 1, resizeTo: host })
     )
     .then(() => {
       initialized = true;
