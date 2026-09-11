@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGameController } from './gameController';
+import { createGameController, ENEMY_ACTION_DELAY_SECONDS } from './gameController';
 import type { WorldMap } from './types';
 import { createBattleFixture } from './e2eBattleFixture';
 const map: WorldMap = {
@@ -23,6 +23,25 @@ const map: WorldMap = {
         { col: 1, row: 2 }
       ]
     }
+  ]
+};
+const reinforcementAndTargetMap: WorldMap = {
+  width: 20,
+  height: 8,
+  spawn: { col: 1, row: 1 },
+  tiles: Array.from({ length: 160 }, (_, i) => ({
+    col: i % 20,
+    row: Math.floor(i / 20),
+    kind: 'grass' as const,
+    walkable: true
+  })),
+  settlements: [
+    { id: 'join', name: 'Join', kind: 'village', countryId: 'test', col: 7, row: 1, radius: 1, bounds: { left: 6, top: 0, right: 8, bottom: 2 }, gates: [] },
+    { id: 'target', name: 'Target', kind: 'village', countryId: 'test', col: 10, row: 1, radius: 1, bounds: { left: 9, top: 0, right: 11, bottom: 2 }, gates: [] }
+  ],
+  goblinNests: [
+    { id: 'battle', col: 1, row: 1, spawnTiles: [{ col: 1, row: 1 }, { col: 1, row: 2 }, { col: 2, row: 2 }] },
+    { id: 'remote', col: 10, row: 3, spawnTiles: [{ col: 10, row: 3 }, { col: 10, row: 4 }, { col: 11, row: 4 }] }
   ]
 };
 describe('controller battle coordination', () => {
@@ -64,6 +83,31 @@ describe('controller battle coordination', () => {
     expect(c.dispatchBattle({ kind: 'end-turn', actorId: 'player' })).toBe(true);
     expect(c.battle?.log.some((event) => event.kind === 'combatant-joined')).toBe(true);
     expect(c.battle?.combatants['goblin-n-1']?.eligibleFromRound).toBe(2);
+  });
+  it('completes player and AI turn boundaries while preserving uncommitted adventurer targets', () => {
+    const c = createGameController(reinforcementAndTargetMap);
+    const remoteTarget = (tile: { col: number; row: number }) => [{ id: 'adventurer-target', kind: 'adventurer' as const, tile }];
+    c.goblins.tick(0.2, remoteTarget({ col: 13, row: 3 }));
+    for (let index = 0; index < 12; index += 1) c.goblins.tick(0.1, remoteTarget({ col: 13, row: 3 }));
+    for (let index = 0; index < 12; index += 1) c.goblins.tick(0.1, remoteTarget({ col: 10, row: 3 }));
+    for (let index = 0; index < 12; index += 1) c.goblins.tick(0.1, remoteTarget({ col: 13, row: 3 }));
+
+    c.startBattleForTest('goblin-battle-0');
+    expect(c.dispatchBattle({ kind: 'end-turn', actorId: 'player' })).toBe(true);
+    expect(c.battle?.log.some((event) => event.kind === 'combatant-joined' && event.actorId === 'adventurer-join')).toBe(true);
+    expect(c.goblins.snapshots().find((goblin) => goblin.id === 'goblin-remote-0')?.targetId).toBe('adventurer-target');
+
+    c.battle!.combatants['goblin-battle-0']!.mp = 0;
+    c.tick(ENEMY_ACTION_DELAY_SECONDS);
+    expect(c.battle?.activeId).toBe('player');
+
+    c.battle!.combatants.player.position = { col: 4, row: 3 };
+    c.battle!.combatants['goblin-battle-0']!.position = { col: 5, row: 3 };
+    c.battle!.combatants.player.mp = 0;
+    expect(c.dispatchBattle({ kind: 'attack', actorId: 'player', targetId: 'goblin-battle-0' })).toBe(true);
+    expect(c.battle?.activeId).toBe('goblin-battle-0');
+    c.battle!.combatants['goblin-battle-0']!.mp = 0;
+    expect(c.dispatchBattle({ kind: 'end-turn', actorId: c.battle!.activeId })).toBe(true);
   });
   it('blocks overworld navigation while battle is active', () => {
     const c = createGameController(map);

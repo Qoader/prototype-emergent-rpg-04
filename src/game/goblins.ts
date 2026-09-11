@@ -53,6 +53,12 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
   }
   const chooseTarget = (state: State, targets: readonly GoblinTarget[]) => targets.filter((target) => distanceSquared(state.movement.tile, target.tile) <= DETECTION_RADIUS ** 2).sort((a, b) => distanceSquared(state.movement.tile, a.tile) - distanceSquared(state.movement.tile, b.tile) || a.id.localeCompare(b.id))[0];
   const setRoute = (state: State, route: Point[], destination: Point | null) => { state.movement.route = route; state.destination = destination; state.movement.destination = destination; };
+  /** Keep the breadcrumb list and its reverse lookup in lockstep. */
+  const truncateTrail = (state: State, length: number) => {
+    for (let index = length; index < state.trail.length; index += 1)
+      state.trailIndex.delete(key(state.trail[index]!));
+    state.trail.length = length;
+  };
   const pursuitBounds = (a: Point, b: Point): SearchBounds => ({ minCol: Math.max(0, Math.min(a.col, b.col) - ROAM_RADIUS), maxCol: Math.min(tiles.width - 1, Math.max(a.col, b.col) + ROAM_RADIUS), minRow: Math.max(0, Math.min(a.row, b.row) - ROAM_RADIUS), maxRow: Math.min(tiles.height - 1, Math.max(a.row, b.row) + ROAM_RADIUS) });
   const routeTo = (state: State, destination: Point, bounded = false, roaming = false) => {
     if (roaming) getRoamingTiles(state.nest);
@@ -63,8 +69,7 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
     const currentIndex = state.trail.findIndex((point) => key(point) === key(state.movement.tile));
     const trailRoute = currentIndex >= 0 ? state.trail.slice(0, currentIndex).reverse() : [];
     if (currentIndex >= 0) {
-      state.trail.length = currentIndex + 1;
-      state.trailIndex = new Map(state.trail.map((point, index) => [key(point), index]));
+      truncateTrail(state, currentIndex + 1);
     }
     // Breadcrumbs are cheap and already describe the route back through
     // explored terrain. If they are stale or incomplete, keep the fallback
@@ -115,7 +120,7 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
     }
     const before = state.movement.tile;
     advanceMovement(state.movement, dt, state.phase === 'pursuing' ? PURSUIT_SPEED : ROAM_SPEED);
-    if (key(before) !== key(state.movement.tile)) { const tileKey = key(state.movement.tile); const prior = state.trailIndex.get(tileKey); if (prior !== undefined) { state.trail.length = prior + 1; } else { state.trailIndex.set(tileKey, state.trail.length); state.trail.push({ ...state.movement.tile }); } }
+    if (key(before) !== key(state.movement.tile)) { const tileKey = key(state.movement.tile); const prior = state.trailIndex.get(tileKey); if (prior !== undefined) { truncateTrail(state, prior + 1); } else { state.trailIndex.set(tileKey, state.trail.length); state.trail.push({ ...state.movement.tile }); } }
     if (state.pause > 0) state.pause = Math.max(0, state.pause - dt);
     state.decision -= dt;
     if (state.decision <= 0) { state.decision += DECISION_INTERVAL; decide(state, targets); }

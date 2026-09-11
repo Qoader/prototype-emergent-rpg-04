@@ -84,6 +84,24 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     movement.route = [];
     movement.destination = null;
   };
+  const goblinTargets = (excludeBattleCommitments = false) => {
+    const excluded = new Set<string>();
+    if (excludeBattleCommitments) {
+      for (const response of adventurers.battleResponses()) excluded.add(response.id);
+      if (session.kind === 'battle')
+        for (const combatant of Object.values(session.battle.combatants))
+          if (combatant.kind === 'adventurer') excluded.add(combatant.id);
+    }
+    return [
+      { id: 'player', kind: 'player' as const, tile: movement.tile, position: { ...movement.position } },
+      ...adventurers.snapshots().filter((npc) => !excluded.has(npc.id)).map((npc) => ({
+        id: npc.id,
+        kind: 'adventurer' as const,
+        tile: npc.tile,
+        position: npc.position
+      }))
+    ];
+  };
   const beginBattle = (id: string) => {
     if (session.kind !== 'exploration') return;
     movement.route = [];
@@ -162,7 +180,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     // life, while deliberately suppressing a new encounter until Continue.
     for (let step = 0; step < 180; step += 1) {
       adventurers.step(1 / 60);
-      goblins.step(1 / 60, [{ id: 'player', kind: 'player', tile: movement.tile, position: { ...movement.position } }]);
+      goblins.step(1 / 60, goblinTargets());
     }
     session = { kind: 'result', encounter, battle: finished };
     aiWait = 0;
@@ -182,8 +200,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
         goblins.respondToBattle(encounter.tile, encounter.tile);
       }
       adventurers.step(1 / 60);
-      const targets = [{ id: 'player', kind: 'player' as const, tile: movement.tile, position: { ...movement.position } }];
-      goblins.step(1 / 60, targets);
+      goblins.step(1 / 60, goblinTargets(true));
       for (const response of adventurers.battleResponses())
         if (response.arrived && !joined.has(response.id) && !waitingReinforcements.some((x) => x.id === response.id))
           waitingReinforcements.push({ ...response, kind: 'adventurer', arrivalStep: reinforcementStep });
@@ -263,23 +280,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       checkContact();
       if (session.kind !== 'exploration') break;
       adventurers.step(dt);
-      const targets = [
-        {
-          id: 'player',
-          kind: 'player' as const,
-          tile: movement.tile,
-          position: { ...movement.position }
-        },
-        ...adventurers
-          .snapshots()
-          .map((npc) => ({
-            id: npc.id,
-            kind: 'adventurer' as const,
-            tile: npc.tile,
-            position: npc.position
-          }))
-      ];
-      goblins.step(dt, targets);
+      goblins.step(dt, goblinTargets());
       checkContact();
       remaining -= dt;
     }

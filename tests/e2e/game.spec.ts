@@ -453,6 +453,44 @@ test.describe('deterministic tactical battle fixture', () => {
     await expect(page.locator('[data-testid="game-canvas"]')).toHaveCount(1);
     expect(pageErrors).toEqual([]);
   });
+  test('keeps real battle controls progressing when an adventurer reinforces', async ({ page }) => {
+    test.setTimeout(60000);
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
+    await page.goto('/?battle-fixture-reinforcement');
+    const battle = page.getByRole('region', { name: 'Tactical battle' });
+    const endTurn = battle.getByRole('button', { name: 'End Turn', exact: true });
+    await expect(battle).toBeVisible({ timeout: 8000 });
+    await expect(endTurn).toBeEnabled({ timeout: 5000 });
+
+    // This boundary simulates the stale-backtrack remote goblin and admits
+    // the nearby ally before the AI receives its turn.
+    await endTurn.click();
+    await expect(battle.getByRole('list', { name: 'Turn order' })).toContainText('Adventurer');
+    await expect(endTurn).toBeEnabled({ timeout: 10000 });
+
+    const movementLabel = await battle.locator('[role="gridcell"].reachable').evaluateAll((cells) => {
+      const points = (elements: Element[]) =>
+        elements.map((cell) => {
+          const [col, row] = cell.getAttribute('aria-label')!.split(', ').map(Number);
+          return { col: col!, row: row! };
+        });
+      const goblins = points([...document.querySelectorAll('.grid button.goblin')]);
+      return points(cells).find((cell) =>
+        goblins.some((goblin) => Math.abs(cell.col - goblin.col) + Math.abs(cell.row - goblin.row) === 1)
+      );
+    });
+    expect(movementLabel).toBeDefined();
+    await battle.getByRole('gridcell', { name: `${movementLabel!.col}, ${movementLabel!.row}` }).click();
+    await expect(battle.getByRole('grid')).toHaveAttribute('aria-busy', 'false', { timeout: 5000 });
+    const attackable = battle.locator('[role="gridcell"].attackable').first();
+    await expect(attackable).toBeVisible({ timeout: 5000 });
+    await attackable.click();
+    await expect(endTurn).toBeEnabled({ timeout: 5000 });
+    await endTurn.click();
+    await expect(endTurn).toBeEnabled({ timeout: 10000 });
+    expect(pageErrors).toEqual([]);
+  });
   test('survives repeated encounters in the generated world', async ({ page }) => {
     test.setTimeout(60000);
     const pageErrors: Error[] = [];

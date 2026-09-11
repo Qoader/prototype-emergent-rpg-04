@@ -6,16 +6,19 @@
   import { createGameRuntime } from '../game/gameRuntime';
   import type { RuntimeFailure } from '../game/gameRuntime';
   import BattleScreen from './BattleScreen.svelte';
-  import { createBattleFixture } from '../game/e2eBattleFixture';
+  import { createBattleFixture, createReinforcementBattleFixture } from '../game/e2eBattleFixture';
   import { tileAt } from '../game/map';
 
   let host: HTMLElement;
   let status = '';
   let placeName = '';
   const stabilityFixture = window.location.search.includes('battle-stability');
+  const reinforcementFixture = window.location.search.includes('battle-fixture-reinforcement');
   const soloFixture = window.location.search.includes('battle-fixture-solo');
   const defeatFixture = window.location.search.includes('battle-fixture-defeat');
-  const map = window.location.search.includes('battle-fixture')
+  const map = reinforcementFixture
+    ? createReinforcementBattleFixture()
+    : window.location.search.includes('battle-fixture')
     ? createBattleFixture(
         !soloFixture && !defeatFixture,
         !defeatFixture
@@ -39,6 +42,18 @@
   }
   const tileStore = createTileStore(map);
   const controller = createGameController(map, tileStore);
+  if (reinforcementFixture) {
+    const target = (tile: { col: number; row: number }) => [
+      { id: 'adventurer-target', kind: 'adventurer' as const, tile }
+    ];
+    controller.goblins.tick(0.2, target({ col: 13, row: 3 }));
+    for (let index = 0; index < 12; index += 1) controller.goblins.tick(0.1, target({ col: 13, row: 3 }));
+    for (let index = 0; index < 12; index += 1) controller.goblins.tick(0.1, target({ col: 10, row: 3 }));
+    for (let index = 0; index < 12; index += 1) controller.goblins.tick(0.1, target({ col: 13, row: 3 }));
+    controller.startBattleForTest('goblin-reinforcement-battle-0');
+    const primary = controller.battle?.combatants['goblin-reinforcement-battle-0'];
+    if (primary) primary.position = { col: 5, row: 4 };
+  }
   if (stabilityFixture && map.goblinNests?.[0]) {
     const id = `goblin-${map.goblinNests[0].id}-0`;
     controller.startBattleForTest(id);

@@ -34,6 +34,21 @@ describe('goblin simulation', () => {
     expect(simulation.snapshots().some((goblin) => goblin.tile.col === nest.col && goblin.tile.row === nest.row)).toBe(true);
   });
 
+  it('keeps breadcrumbs dense after repeated backtracking before a lost target return', () => {
+    const simulation = createGoblinSimulation({ seed: 3, nests: [nest], tiles: map() });
+    const target = (tile: { col: number; row: number }) => [{ id: 'adventurer', kind: 'adventurer' as const, tile }];
+    simulation.tick(0.2, target({ col: 5, row: 2 }));
+    for (let index = 0; index < 12; index += 1) simulation.tick(0.1, target({ col: 5, row: 2 }));
+    for (let index = 0; index < 12; index += 1) simulation.tick(0.1, target({ col: 2, row: 2 }));
+    for (let index = 0; index < 12; index += 1) simulation.tick(0.1, target({ col: 5, row: 2 }));
+
+    expect(() => {
+      for (let index = 0; index < 32; index += 1) simulation.tick(0.1, []);
+    }).not.toThrow();
+    for (let index = 0; index < 100; index += 1) simulation.tick(1 / 60, []);
+    expect(simulation.snapshots().some((goblin) => goblin.tile.col === nest.col && goblin.tile.row === nest.row)).toBe(true);
+  });
+
   it('does not replan an unchanged pursuit route on every perception interval', () => {
     let reads = 0;
     const reader = map();
