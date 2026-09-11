@@ -5,8 +5,9 @@ import { acceptsPointer, tilePointFromPointer } from './input';
 import { createAdventurerSimulation } from './adventurers';
 import { tileAt } from './map';
 import { createGoblinSimulation } from './goblins';
-import { applyBattleCommand, createBattle } from './battle/engine';
+import { advanceTurn, applyBattleCommand, createBattle } from './battle/engine';
 import { chooseGoblinCommand } from './battle/ai';
+import { admitReinforcements, type BattleArrival } from './battle/reinforcements';
 import type { BattleCommand, BattleState, BattleNotice } from './battle/types';
 import { initialBattleNotice, reduceBattleNotice } from './battle/notice';
 import { findGoblinContact } from './encounters';
@@ -53,6 +54,8 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
   let battlePlayback: ReturnType<typeof createMovement> | undefined;
   let battlePlaybackActor = 'player';
   let battlePlaybackElapsed = 0;
+  let reinforcementStep = 0;
+  let waitingReinforcements: BattleArrival[] = [];
   const listeners = new Set<(snapshot: GameSnapshot) => void>();
   const checkpoints = createCheckpointTracker(map.spawn, map.settlements ?? [], reader);
   const snapshot = (): GameSnapshot => {
@@ -114,6 +117,14 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       battle: createBattle(id, scene)
     };
     battleNotice = initialBattleNotice();
+    reinforcementStep = 0;
+    waitingReinforcements = [];
+    // NPCs perceive the fixed encounter tile and retain that commitment.
+    if (!map.disableBattleResponses) {
+      adventurers.respondToBattle(contact, contact);
+      goblins.respondToBattle(contact, contact);
+    }
+    goblins.setParticipant(id, true);
     aiWait = 0;
     notify();
   };
@@ -138,15 +149,62 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
   const finish = () => {
     if (session.kind !== 'battle' || !session.battle.outcome) return false;
     const { encounter, battle: finished } = session;
-    if (finished.outcome === 'victory') goblins.remove(encounter.goblinId);
+    for (const combatant of Object.values(finished.combatants)) {
+      if (combatant.hp > 0) continue;
+      if (combatant.kind === 'goblin') goblins.remove(combatant.id);
+      if (combatant.kind === 'adventurer') adventurers.remove(combatant.id);
+    }
+    if (map.removeGoblinsAfterBattle) goblins.removeAll();
+    adventurers.clearBattleResponses();
+    goblins.clearBattleResponses();
     if (finished.outcome === 'defeat') relocate(checkpoints.resolve());
+    // The terminal action is still a completed turn. Advance ordinary NPC
+    // life, while deliberately suppressing a new encounter until Continue.
+    for (let step = 0; step < 180; step += 1) {
+      adventurers.step(1 / 60);
+      goblins.step(1 / 60, [{ id: 'player', kind: 'player', tile: movement.tile, position: { ...movement.position } }]);
+    }
     session = { kind: 'result', encounter, battle: finished };
     aiWait = 0;
     return true;
   };
+  /** Advances exactly three simulated seconds at every completed turn. */
+  const advanceBattleWorld = () => {
+    if (session.kind !== 'battle') return;
+    const encounter = session.encounter;
+    const joined = new Set(Object.keys(session.battle.combatants));
+    for (let index = 0; index < 180; index += 1) {
+      reinforcementStep += 1;
+      // Newly-visible NPCs commit during this interval; committed ones never
+      // depend on the radius check again.
+      if (!map.disableBattleResponses) {
+        adventurers.respondToBattle(encounter.tile, encounter.tile);
+        goblins.respondToBattle(encounter.tile, encounter.tile);
+      }
+      adventurers.step(1 / 60);
+      const targets = [{ id: 'player', kind: 'player' as const, tile: movement.tile, position: { ...movement.position } }];
+      goblins.step(1 / 60, targets);
+      for (const response of adventurers.battleResponses())
+        if (response.arrived && !joined.has(response.id) && !waitingReinforcements.some((x) => x.id === response.id))
+          waitingReinforcements.push({ ...response, kind: 'adventurer', arrivalStep: reinforcementStep });
+      for (const response of goblins.battleResponses())
+        if (response.arrived && !joined.has(response.id) && response.id !== encounter.goblinId && !waitingReinforcements.some((x) => x.id === response.id))
+          waitingReinforcements.push({ ...response, kind: 'goblin', arrivalStep: reinforcementStep });
+    }
+    const events: import('./battle/types').BattleEvent[] = [];
+    waitingReinforcements = admitReinforcements(session.battle, waitingReinforcements, events);
+    for (const event of events) {
+      if (event.kind !== 'combatant-joined') continue;
+      if (session.battle.combatants[event.actorId]?.kind === 'goblin') goblins.setParticipant(event.actorId, true);
+      else adventurers.setParticipant(event.actorId, true);
+    }
+    advanceTurn(session.battle, events);
+    session.battle.log = [...session.battle.log, ...events].slice(-50);
+    battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), events);
+  };
   const apply = (command: BattleCommand) => {
     if (session.kind !== 'battle' || battlePlayback) return false;
-    const transition = applyBattleCommand(session.battle, command);
+    const transition = applyBattleCommand(session.battle, command, { deferTurn: true });
     if ('error' in transition) return false;
     battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), transition.events);
     session = { ...session, battle: transition.state };
@@ -160,8 +218,10 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       battlePlayback.route = move.path.slice(1).map((point) => ({ ...point }));
       battlePlayback.destination = { ...move.to };
     }
-    finish();
-    if (session.kind === 'battle' && session.battle.activeId !== 'player') aiWait = 0;
+    const ended = transition.events.some((event) => event.kind === 'turn-ended');
+    if (session.kind === 'battle' && session.battle.outcome) finish();
+    else if (session.kind === 'battle' && ended) advanceBattleWorld();
+    if (session.kind === 'battle' && session.battle.combatants[session.battle.activeId]?.control === 'ai') aiWait = 0;
     notify();
     return true;
   };
@@ -177,7 +237,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       }
       if (
         session.kind === 'battle' &&
-        session.battle.activeId !== 'player' &&
+        session.battle.combatants[session.battle.activeId]?.control === 'ai' &&
         !session.battle.outcome
       ) {
         aiWait += elapsed;

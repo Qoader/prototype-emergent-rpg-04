@@ -32,8 +32,8 @@ function inBounds(point: Point, bounds?: SearchBounds) {
       point.row <= bounds.maxRow)
   );
 }
-function neighbors(reader: TileReader, point: Point, bounds?: SearchBounds): Point[] {
-  return directions.flatMap((step) => {
+function neighbors(reader: TileReader, point: Point, bounds?: SearchBounds, cardinalOnly = false): Point[] {
+  return directions.filter((step) => !cardinalOnly || !step.col || !step.row).flatMap((step) => {
     const next = { col: point.col + step.col, row: point.row + step.row };
     if (!inBounds(next, bounds) || !reader.getTile(next)?.walkable) return [];
     if (
@@ -113,7 +113,8 @@ export function findPath(
   map: WorldMap | TileReader,
   start: Point,
   goal: Point,
-  bounds?: SearchBounds
+  bounds?: SearchBounds,
+  options: { cardinalOnly?: boolean } = {}
 ): Point[] | null {
   const reader = readerFor(map);
   if (
@@ -139,13 +140,13 @@ export function findPath(
       route.reverse();
       return route;
     }
-    for (const next of neighbors(reader, current, bounds)) {
+    for (const next of neighbors(reader, current, bounds, options.cardinalOnly)) {
       const step = next.col !== current.col && next.row !== current.row ? Math.SQRT2 : 1;
       const nextCost = cost.get(key(current))! + step;
       if (nextCost >= (cost.get(key(next)) ?? Infinity)) continue;
       cost.set(key(next), nextCost);
       came.set(key(next), current);
-      open.push({ point: next, score: nextCost + distance(next, goal) });
+      open.push({ point: next, score: nextCost + (options.cardinalOnly ? Math.abs(next.col - goal.col) + Math.abs(next.row - goal.row) : distance(next, goal)) });
     }
   }
   return null;

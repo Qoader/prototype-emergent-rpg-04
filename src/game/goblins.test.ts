@@ -45,4 +45,26 @@ describe('goblin simulation', () => {
     simulation.tick(1, [target]);
     expect(reads - afterInitialPlan).toBeLessThan(120);
   });
+  it('uses east for a goblin already on the encounter and throttles failed response searches', () => {
+    let reads = 0;
+    const base = map();
+    const blocked = { ...base, getTile: (point: { col: number; row: number }) => { reads += 1; const tile = base.getTile(point); return point.col === 4 && point.row === 2 ? { ...tile!, walkable: false } : tile; } };
+    const simulation = createGoblinSimulation({ seed: 3, nests: [nest], tiles: blocked });
+    // First goblin is already at its encounter tile.
+    simulation.respondToBattle({ col: 2, row: 2 }, { col: 2, row: 2 });
+    expect(simulation.battleResponses().find((item) => item.id.endsWith('-0'))).toMatchObject({ arrived: true, approachEdge: 'east' });
+    simulation.respondToBattle({ col: 4, row: 2 }, { col: 2, row: 2 });
+    const first = reads;
+    for (let i = 0; i < 11; i += 1) simulation.respondToBattle({ col: 4, row: 2 }, { col: 2, row: 2 });
+    expect(reads - first).toBeLessThan(10);
+  });
+
+  it('returns an arrived goblin home without moving an incoming responder', () => {
+    const simulation = createGoblinSimulation({ seed: 3, nests: [nest], tiles: map() });
+    simulation.respondToBattle({ col: 2, row: 2 }, { col: 2, row: 2 });
+    simulation.respondToBattle({ col: 8, row: 2 }, { col: 2, row: 2 });
+    const incoming = simulation.snapshots().find((npc) => npc.id.endsWith('-1'))!;
+    simulation.clearBattleResponses();
+    expect(simulation.snapshots().find((npc) => npc.id === incoming.id)!.tile).toEqual(incoming.tile);
+  });
 });

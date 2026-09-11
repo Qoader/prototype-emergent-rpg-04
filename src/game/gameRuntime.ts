@@ -262,6 +262,8 @@ export function createGameRuntime({
       let animationTime = 0;
       let lastAnimation: `${PlayerAnimation}:${string}` = 'idle:south';
       const draw = (deltaSeconds = 0) => {
+        const suspendedAdventurers = new Set(controller.adventurers.battleResponses().map((npc) => npc.id));
+        const suspendedGoblins = new Set(controller.goblins.battleResponses().map((npc) => npc.id));
         const walking = movement.route.length > 0;
         const animation: PlayerAnimation = walking ? 'walk' : 'idle';
         animationTime =
@@ -272,9 +274,15 @@ export function createGameRuntime({
         const frameIndex = Math.floor(animationTime * (walking ? 10 : 2)) % (walking ? 4 : 2);
         player.setFrame(animation, movement.facing, frameIndex);
         positionWorldCharacter(player.view, movement.position);
-        for (const npc of controller.adventurers.snapshots()) {
+        const adventurerSnapshots = controller.adventurers.snapshots();
+        const liveAdventurerIds = new Set(adventurerSnapshots.map((npc) => npc.id));
+        for (const [id, resource] of adventurerViews)
+          if (!liveAdventurerIds.has(id)) { resource.sprite.view.destroy({ children: true }); adventurerViews.delete(id); }
+        for (const npc of adventurerSnapshots) {
           const resource = adventurerViews.get(npc.id);
           if (!resource) continue;
+          resource.sprite.view.visible = !suspendedAdventurers.has(npc.id);
+          if (!resource.sprite.view.visible) continue;
           const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
           resource.time =
             resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0;
@@ -295,6 +303,8 @@ export function createGameRuntime({
         for (const npc of goblins) {
           const resource = goblinViews.get(npc.id);
           if (!resource) continue;
+          resource.sprite.view.visible = !suspendedGoblins.has(npc.id);
+          if (!resource.sprite.view.visible) continue;
           const state = `${npc.walking ? 'walk' : 'idle'}:${npc.facing}`;
           resource.time =
             resource.state === state ? resource.time + Math.min(deltaSeconds, 0.1) : 0;

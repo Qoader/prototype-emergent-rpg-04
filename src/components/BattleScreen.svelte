@@ -215,13 +215,15 @@
     };
   });
   $: player = battle?.combatants.player;
-  $: goblin = battle && Object.values(battle.combatants).find((c) => c.side === 'goblin');
+  $: goblin = battle && Object.values(battle.combatants).find((c) => c.side === 'goblin' && c.hp > 0);
   $: cells = battle && player ? reachable(battle, 'player') : new Map();
   const move = (col: number, row: number) =>
     dispatch({ kind: 'move', actorId: 'player', destination: { col, row } });
+  let selectedEnemyId: string | undefined;
+  $: if (!selectedEnemyId || !battle?.combatants[selectedEnemyId] || battle.combatants[selectedEnemyId]?.hp <= 0) selectedEnemyId = goblin?.id;
   const attack = () => {
-    if (goblin && battle && canAttack(battle, 'player', goblin.id))
-      dispatch({ kind: 'attack', actorId: 'player', targetId: goblin.id });
+    if (selectedEnemyId && battle && canAttack(battle, 'player', selectedEnemyId))
+      dispatch({ kind: 'attack', actorId: 'player', targetId: selectedEnemyId });
   };
   $: canAct = Boolean(
     battle &&
@@ -230,7 +232,7 @@
     !battleBusy &&
     !battle.visual?.[battle.activeId]?.moving
   );
-  $: attackReady = Boolean(battle && goblin && canAct && canAttack(battle, 'player', goblin.id));
+  $: attackReady = Boolean(battle && selectedEnemyId && canAct && canAttack(battle, 'player', selectedEnemyId));
   $: movementTargets = canAct ? [...cells.values()].filter((cell) => cell.distance > 0).map((cell) => cell.point) : [];
   $: attackTargets = canAct && battle
     ? Object.values(battle.combatants).filter((combatant) => combatant.side === 'goblin' && canAttack(battle, 'player', combatant.id)).map((combatant) => combatant.position)
@@ -256,6 +258,7 @@
     }
     if (!canAct) return;
     if (occupant?.side === 'goblin') {
+      selectedEnemyId = Object.values(battle!.combatants).find((c) => c.hp > 0 && c.position.col === col && c.position.row === row)?.id;
       attack();
       return;
     }
@@ -293,6 +296,18 @@
           >Goblin HP {goblin?.hp}/{goblin?.maxHp} · ATK {goblin?.attack} · AP {goblin?.ap} · MP {goblin?.mp}</span
         >
       </div>
+      <ol class="roster" aria-label="Turn order">
+        {#each battle.turnOrder as id (id)}
+          {@const combatant = battle.combatants[id]}
+          {#if combatant}
+            <li class:active={id === battle.activeId} class:dead={combatant.hp <= 0}>
+              {combatant.kind === 'player' ? 'You' : combatant.kind === 'adventurer' ? 'Adventurer' : 'Goblin'}
+              · HP {combatant.hp}/{combatant.maxHp} · AP/MP {combatant.ap}/{combatant.mp}
+              {#if combatant.eligibleFromRound > battle.turn} (joins round {combatant.eligibleFromRound}){/if}
+            </li>
+          {/if}
+        {/each}
+      </ol>
     </header>
     <div class="battle-board-wrap">
       <button class="center-button" on:click={centerCombatants}>Center</button>
@@ -350,6 +365,8 @@
                 class:reachable={movementTargetKeys.has(`${col},${row}`)}
                 class:attackable={attackTargetKeys.has(`${col},${row}`)}
                 class:focused={keyboardFocus?.col === col && keyboardFocus?.row === row}
+                class:player={occupant?.side === 'player'}
+                class:goblin={occupant?.side === 'goblin'}
                 role="gridcell"
                 aria-label={`${col}, ${row}${occupant ? `, ${occupant.side}` : ''}`}
                 aria-describedby={cell?.distance ? `move-cost-${index}` : undefined}
@@ -430,6 +447,9 @@
     width: 100%;
     margin: auto;
   }
+  .roster { grid-column: 1 / -1; display: flex; gap: .35rem .75rem; flex-wrap: wrap; margin: 0; padding: 0; list-style: none; font-size: .76rem; color: #cbd8c0; }
+  .roster .active { color: #fff3b0; font-weight: bold; }
+  .roster .dead { opacity: .45; text-decoration: line-through; }
   .eyebrow {
     margin: 0;
     color: #d6b867;

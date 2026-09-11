@@ -70,14 +70,12 @@ export function createBattleRuntime(
   let errorReported = false;
   let latestState: BattleState | undefined;
   let latestOverlay: BattleOverlayState = EMPTY_BATTLE_OVERLAY;
-  let player: ReturnType<typeof createPlayerSprite> | undefined;
-  let goblin: ReturnType<typeof createGoblinSprite> | undefined;
+  const characters = new Map<string, PlayerSprite>();
   let ownedCanvas: HTMLCanvasElement | undefined;
   let readyNotified = false;
   const animationScheduler = options.animationScheduler ?? browserAnimationScheduler;
   let animationHandle: number | undefined;
-  let playerAnimation: CharacterAnimationState | undefined;
-  let goblinAnimation: CharacterAnimationState | undefined;
+  const animations = new Map<string, CharacterAnimationState>();
 
   const stopAnimation = () => {
     if (animationHandle === undefined || !animationScheduler) return;
@@ -105,10 +103,8 @@ export function createBattleRuntime(
     } catch (error) {
       reportError(error);
     }
-    player = undefined;
-    goblin = undefined;
-    playerAnimation = undefined;
-    goblinAnimation = undefined;
+    characters.clear();
+    animations.clear();
     const canvas = ownedCanvas;
     ownedCanvas = undefined;
     try {
@@ -180,9 +176,11 @@ export function createBattleRuntime(
     if (phase !== 'ready' || !latestState) return;
     try {
       const nowMs = animationScheduler!.now();
-      const playerChanged = advanceIdle(player, playerAnimation, nowMs);
-      const goblinChanged = advanceIdle(goblin, goblinAnimation, nowMs);
-      const changed = playerChanged || goblinChanged;
+      // Do not use Array.some here: it short-circuits after the first sprite
+      // changes, starving every later stationary combatant of idle time.
+      let changed = false;
+      for (const [id, sprite] of characters)
+        changed = advanceIdle(sprite, animations.get(id), nowMs) || changed;
       if (changed) app.render();
       ensureAnimation();
     } catch (error) {
@@ -195,7 +193,7 @@ export function createBattleRuntime(
     animationHandle = animationScheduler.request(tickAnimation);
   };
   const draw = (state: BattleState, overlay: BattleOverlayState = EMPTY_BATTLE_OVERLAY) => {
-    if (phase !== 'ready' || !player || !goblin) return;
+    if (phase !== 'ready') return;
     try {
       const cell = BATTLE_TILE_SIZE;
       // Board-local drawing stays independent of its protective surface margin.
@@ -305,24 +303,17 @@ export function createBattleRuntime(
         stage.addChildAt(outline, 4);
       } else drawBorder(border);
       const nowMs = animationScheduler?.now() ?? 0;
-      const actor = state.combatants.player;
-      const enemy = Object.values(state.combatants).find(
-        (combatant) => combatant.side === 'goblin'
-      );
-      playerAnimation = synchronizeCharacter(
-        player,
-        actor,
-        actor ? combatantPose(state, actor) : undefined,
-        playerAnimation,
-        nowMs
-      );
-      goblinAnimation = synchronizeCharacter(
-        goblin,
-        enemy,
-        enemy ? combatantPose(state, enemy) : undefined,
-        goblinAnimation,
-        nowMs
-      );
+      for (const [id, combatant] of Object.entries(state.combatants)) {
+        let sprite = characters.get(id);
+        if (!sprite) {
+          sprite = combatant.kind === 'goblin' ? createGoblinSprite() : createPlayerSprite();
+          characters.set(id, sprite);
+          stage.addChild(sprite.view);
+        }
+        const resource = synchronizeCharacter(sprite, combatant, combatantPose(state, combatant), animations.get(id), nowMs);
+        if (resource) animations.set(id, resource); else animations.delete(id);
+      }
+      for (const [id, sprite] of characters) if (!state.combatants[id]) sprite.view.visible = false;
       app.render();
       if (!readyNotified) {
         readyNotified = true;
@@ -354,10 +345,7 @@ export function createBattleRuntime(
           destroyInitializedApplication();
           return;
         }
-        player = createPlayerSprite();
-        goblin = createGoblinSprite();
         app.stage.addChild(stage);
-        stage.addChild(player.view, goblin.view);
         host.appendChild(app.canvas);
         phase = 'ready';
         if (latestState) draw(latestState, latestOverlay);

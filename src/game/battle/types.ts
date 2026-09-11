@@ -5,6 +5,11 @@ export type BattleSide = 'player' | 'goblin';
 export type BattleCombatant = {
   id: string;
   side: BattleSide;
+  /** Identity and control are intentionally separate from allegiance. */
+  kind: 'player' | 'adventurer' | 'goblin';
+  control: 'human' | 'ai';
+  /** A reinforcement may be targeted before it may take a turn. */
+  eligibleFromRound: number;
   position: Point;
   attack: number;
   maxHp: number;
@@ -24,6 +29,7 @@ export type BattleState = {
   activeId: string;
   turn: number;
   outcome: BattleOutcome | null;
+  phase: 'acting' | 'between-turns' | 'finished';
   log: BattleEvent[];
   /** Immutable terrain captured at encounter start (rendering may repeat it). */
   scene?: BattleScene;
@@ -43,6 +49,8 @@ export type BattleEvent =
   | { kind: 'move'; actorId: string; from: Point; to: Point; cost: number; path: Point[] }
   | { kind: 'attack'; actorId: string; targetId: string; damage: number; remainingHp: number }
   | { kind: 'turn-start'; actorId: string; turn: number }
+  | { kind: 'turn-ended'; actorId: string; turn: number; reason: 'manual' | 'exhausted' | 'battle-finished' }
+  | { kind: 'combatant-joined'; actorId: string; position: Point; eligibleFromRound: number }
   | { kind: 'finished'; outcome: BattleOutcome };
 export type BattleTransition =
   { state: BattleState; events: BattleEvent[] } | { state: BattleState; error: string; events: [] };

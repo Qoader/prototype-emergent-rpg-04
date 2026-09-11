@@ -57,4 +57,23 @@ describe('adventurer simulation', () => {
     for (let step = 0; step < 1000; step += 1) simulation.tick(0.1);
     expect(simulation.snapshots().every((npc) => npc.phase !== 'traveling' && npc.currentSettlementId !== null)).toBe(true);
   });
+  it('uses west for an adventurer on the encounter and returns arrived allies to their settlement', () => {
+    const { map, reader } = world();
+    const simulation = createAdventurerSimulation(map, reader);
+    simulation.respondToBattle({ col: 1, row: 1 }, { col: 1, row: 1 });
+    expect(simulation.battleResponses().find((item) => item.id === 'adventurer-a')).toMatchObject({ arrived: true, approachEdge: 'west' });
+    simulation.clearBattleResponses();
+    expect(simulation.snapshots().find((npc) => npc.id === 'adventurer-a')!.phase).toBe('returning');
+  });
+
+  it('throttles failed adventurer response route searches to the decision cadence', () => {
+    const { map, reader } = world();
+    let reads = 0;
+    const counted = { ...reader, getTile: (point: { col: number; row: number }) => { reads += 1; const tile = reader.getTile(point); return point.col === 3 && point.row === 1 ? { ...tile!, walkable: false } : tile; } };
+    const simulation = createAdventurerSimulation(map, counted);
+    simulation.respondToBattle({ col: 3, row: 1 }, { col: 1, row: 1 });
+    const first = reads;
+    for (let i = 0; i < 10; i += 1) simulation.respondToBattle({ col: 3, row: 1 }, { col: 1, row: 1 });
+    expect(reads - first).toBeLessThan(10);
+  });
 });

@@ -74,4 +74,8 @@ export type WorldMap = {
   roads?: WorldRoad[];
   features?: WorldFeature[];
   goblinNests?: GoblinNest[];
+  /** Test-only authored fixtures may isolate a scripted duel. */
+  disableBattleResponses?: boolean;
+  /** Test-only: end the scripted encounter population after its outcome. */
+  removeGoblinsAfterBattle?: boolean;
 };

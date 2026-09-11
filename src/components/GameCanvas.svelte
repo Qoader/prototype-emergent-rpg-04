@@ -13,10 +13,12 @@
   let status = '';
   let placeName = '';
   const stabilityFixture = window.location.search.includes('battle-stability');
+  const soloFixture = window.location.search.includes('battle-fixture-solo');
+  const defeatFixture = window.location.search.includes('battle-fixture-defeat');
   const map = window.location.search.includes('battle-fixture')
     ? createBattleFixture(
-        !window.location.search.includes('battle-fixture-solo'),
-        !window.location.search.includes('battle-fixture-defeat')
+        !soloFixture && !defeatFixture,
+        !defeatFixture
       )
     : createWorld(stabilityFixture ? 7331 : undefined);
   if (stabilityFixture && map.goblinNests?.[0]) {

@@ -7,7 +7,7 @@ const clone = (state: BattleState): BattleState => ({
   combatants: Object.fromEntries(
     Object.entries(state.combatants).map(([id, c]) => [id, { ...c, position: { ...c.position } }])
   ),
-  turnOrder: [...state.turnOrder],
+    turnOrder: [...state.turnOrder],
   log: [...state.log]
 });
 export const createBattle = (goblinId: string, scene?: BattleState['scene']): BattleState => {
@@ -20,22 +20,29 @@ export const createBattle = (goblinId: string, scene?: BattleState['scene']): Ba
     activeId: 'player',
     turn: 1,
     outcome: null,
+    phase: 'acting',
     log: [{ kind: 'turn-start', actorId: 'player', turn: 1 }],
     scene
   };
 };
 /** Shared turn advancement used by explicit and automatic end-turns. */
 export function advanceTurn(state: BattleState, events: BattleEvent[]): void {
-  const nextIndex = (state.turnOrder.indexOf(state.activeId) + 1) % state.turnOrder.length;
-  state.activeId = state.turnOrder[nextIndex]!;
-  state.turn += nextIndex === 0 ? 1 : 0;
-  const next = state.combatants[state.activeId]!;
-  next.ap = next.maxAp;
-  next.mp = next.maxMp;
-  events.push({ kind: 'turn-start', actorId: next.id, turn: state.turn });
+  let index = state.turnOrder.indexOf(state.activeId);
+  for (let tries = 0; tries < state.turnOrder.length; tries += 1) {
+    index = (index + 1) % state.turnOrder.length;
+    if (index === 0) state.turn += 1;
+    const next = state.combatants[state.turnOrder[index]!];
+    if (!next || next.hp <= 0 || next.eligibleFromRound > state.turn) continue;
+    state.activeId = next.id;
+    next.ap = next.maxAp;
+    next.mp = next.maxMp;
+    state.phase = 'acting';
+    events.push({ kind: 'turn-start', actorId: next.id, turn: state.turn });
+    return;
+  }
 }
-export function applyBattleCommand(input: BattleState, command: BattleCommand): BattleTransition {
-  if (input.outcome) return { state: input, error: 'Battle is finished', events: [] };
+export function applyBattleCommand(input: BattleState, command: BattleCommand, options: { deferTurn?: boolean } = {}): BattleTransition {
+  if (input.outcome || input.phase === 'between-turns') return { state: input, error: 'Battle is not accepting commands', events: [] };
   if (command.actorId !== input.activeId)
     return { state: input, error: 'It is not that combatant’s turn', events: [] };
   const state = clone(input);
@@ -77,12 +84,25 @@ export function applyBattleCommand(input: BattleState, command: BattleCommand): 
       remainingHp: target.hp
     });
     if (target.hp === 0) {
-      state.outcome = target.side === 'goblin' ? 'victory' : 'defeat';
-      events.push({ kind: 'finished', outcome: state.outcome });
+      state.outcome = target.id === 'player' ? 'defeat' : Object.values(state.combatants).filter((c) => c.side === 'goblin').every((c) => c.hp === 0) ? 'victory' : null;
+      if (state.outcome) {
+        state.phase = 'finished';
+        events.push({ kind: 'turn-ended', actorId: actor.id, turn: state.turn, reason: 'battle-finished' });
+      }
+      if (state.outcome) events.push({ kind: 'finished', outcome: state.outcome });
     }
-  } else advanceTurn(state, events);
-  if (command.kind !== 'end-turn' && !state.outcome && actor.ap === 0 && actor.mp === 0)
-    advanceTurn(state, events);
+  } else {
+    state.phase = 'between-turns';
+    events.push({ kind: 'turn-ended', actorId: actor.id, turn: state.turn, reason: 'manual' });
+  }
+  if (command.kind !== 'end-turn' && !state.outcome && actor.ap === 0 && actor.mp === 0) {
+    state.phase = 'between-turns';
+    events.push({ kind: 'turn-ended', actorId: actor.id, turn: state.turn, reason: 'exhausted' });
+  }
+  // Keep the pure engine convenient for standalone consumers and legacy
+  // tests. The world controller opts into the explicit boundary so it can
+  // advance world time before selecting the next actor.
+  if (state.phase === 'between-turns' && !options.deferTurn) advanceTurn(state, events);
   state.log = [...state.log, ...events].slice(-50);
   return { state, events };
 }

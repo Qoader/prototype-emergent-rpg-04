@@ -12,4 +12,7 @@ describe('battle notice presentation reducer', () => {
     const initial = initialBattleNotice();
     expect(reduceBattleNotice(initial, [])).toBe(initial);
   });
+  it('announces faction-specific reinforcements and next-round eligibility', () => {
+    expect(reduceBattleNotice(initialBattleNotice(), [{ kind: 'combatant-joined', actorId: 'adventurer-town', position: { col: 0, row: 4 }, eligibleFromRound: 2 }]).message).toContain('acts next round');
+  });
 });

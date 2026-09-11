@@ -1,6 +1,7 @@
 import { advanceMovement, createMovement, type Facing } from './movement';
 import { isTraversableRoute } from './domainTiles';
 import type { Point, Settlement, TileReader, WorldMap } from './types';
+export type BattleResponseSnapshot = { id: string; arrived: boolean; approachEdge: 'north' | 'east' | 'south' | 'west' };
 
 export type AdventurerPhase = 'roaming' | 'returning' | 'traveling';
 export type AdventurerSnapshot = {
@@ -48,7 +49,7 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
     const id = `adventurer-${settlement.id}`;
     const movement = createMovement({ col: settlement.col, row: settlement.row });
     const random = seeded(map.seed ?? 0, id);
-    return { id, settlement, movement, random, phase: 'roaming' as AdventurerPhase, current: settlement.id as string | null, previous: null as string | null, destination: null as string | null, visit: randomRange(random, 0, 60), pause: 0, target: null as Point | null, finishingRoamStep: false };
+    return { id, settlement, movement, random, phase: 'roaming' as AdventurerPhase, current: settlement.id as string | null, previous: null as string | null, destination: null as string | null, visit: randomRange(random, 0, 60), pause: 0, target: null as Point | null, finishingRoamStep: false, battle: null as { destination: Point; arrived: boolean; approachEdge: BattleResponseSnapshot['approachEdge'] } | null, battleRetry: 0 };
   });
   const localTargets = new Map<string, Point[]>();
   const local = (s: Settlement) => {
@@ -85,6 +86,19 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
     return false;
   };
   const tickOne = (state: (typeof states)[number], dt: number) => {
+    state.battleRetry = Math.max(0, state.battleRetry - dt);
+    if (state.battle) {
+      if (!state.battle.arrived) {
+        const before = { ...state.movement.tile };
+        advanceMovement(state.movement, dt, 5);
+        if (!state.movement.route.length) {
+          state.battle.arrived = true;
+          const dx = state.movement.tile.col - before.col, dy = state.movement.tile.row - before.row;
+          state.battle.approachEdge = Math.abs(dx) >= Math.abs(dy) ? dx >= 0 ? 'west' : 'east' : dy >= 0 ? 'north' : 'south';
+        }
+      }
+      return;
+    }
     const before = state.movement.route.length;
     if (state.phase === 'traveling') {
       advanceMovement(state.movement, dt, SPEED);
@@ -127,7 +141,30 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
   const tick = (delta: number) => { accumulator += Math.min(Math.max(0, delta), 0.1); while (accumulator >= 1 / 60) { for (const state of states) tickOne(state, 1 / 60); accumulator -= 1 / 60; } };
   const snapshots = () => states.map((s): AdventurerSnapshot => ({ id: s.id, position: { ...s.movement.position }, tile: { ...s.movement.tile }, facing: s.movement.facing, walking: s.movement.route.length > 0, phase: s.phase, currentSettlementId: s.current, previousSettlementId: s.previous, destinationSettlementId: s.destination }));
   const step = (delta: number) => { for (const state of states) tickOne(state, delta); };
-  return { tick, step, snapshots };
+  const respondToBattle = (destination: Point, detect: Point) => {
+    for (const state of states) {
+      if (state.battle || (state.movement.tile.col - detect.col) ** 2 + (state.movement.tile.row - detect.row) ** 2 > 64) continue;
+      if (state.battleRetry > 0) continue;
+      const route = path(reader, state.movement.tile, destination, (p) => reader.getTile(p)?.walkable === true);
+      state.battleRetry = 0.2;
+      if (route) { state.movement.route = route; state.movement.destination = destination; state.battle = { destination: { ...destination }, arrived: route.length === 0, approachEdge: 'west' }; }
+    }
+  };
+  const battleResponses = (): BattleResponseSnapshot[] => states.filter((s) => s.battle).map((s) => ({ id: s.id, arrived: s.battle!.arrived, approachEdge: s.battle!.approachEdge }));
+  const setParticipant = (id: string, value: boolean) => { const state = states.find((s) => s.id === id); if (!state?.battle) return; if (!value) state.battle = null; else state.battle.arrived = true; };
+  const clearBattleResponses = () => { for (const state of states) if (state.battle) {
+    // Arrived allies recover to their associated settlement; incoming NPCs
+    // simply continue from the point where the encounter ended.
+    if (state.battle.arrived) {
+      const goal = { col: state.settlement.col, row: state.settlement.row };
+      state.movement.route = path(reader, state.movement.tile, goal, (p) => reader.getTile(p)?.walkable === true) ?? [];
+      state.movement.destination = goal;
+      state.phase = 'returning';
+    }
+    state.battle = null;
+  } };
+  const remove = (id: string) => { const index = states.findIndex((state) => state.id === id); if (index < 0) return false; states.splice(index, 1); return true; };
+  return { tick, step, snapshots, respondToBattle, battleResponses, setParticipant, clearBattleResponses, remove };
 }
 
 export type AdventurerSimulation = ReturnType<typeof createAdventurerSimulation>;

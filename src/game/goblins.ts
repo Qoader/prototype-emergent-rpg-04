@@ -19,7 +19,7 @@ const randomFor = (seed: number, id: string) => { let value = (seed ^ 2166136261
 
 export function createGoblinSimulation(options: { seed?: number; nests: readonly GoblinNest[]; tiles: TileReader; settlements?: readonly Settlement[] }) {
   const { tiles, settlements = [] } = options;
-  type State = { id: string; nest: GoblinNest; home: Point; movement: Movement; random: () => number; phase: GoblinPhase; targetId: string | null; lastSeen: Point | null; unseen: number; decision: number; pause: number; trail: Point[]; trailIndex: Map<string, number>; destination: Point | null };
+  type State = { id: string; nest: GoblinNest; home: Point; movement: Movement; random: () => number; phase: GoblinPhase; targetId: string | null; lastSeen: Point | null; unseen: number; decision: number; pause: number; trail: Point[]; trailIndex: Map<string, number>; destination: Point | null; battle: { destination: Point; arrived: boolean; approachEdge: 'north' | 'east' | 'south' | 'west' } | null; battleRetry: number };
   const states: State[] = [];
   const roamingTiles = new Map<string, Point[]>();
   // The roaming set is static for the lifetime of a world. Keep a keyed
@@ -49,14 +49,14 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
   for (const nest of options.nests) for (let index = 0; index < nest.spawnTiles.length; index += 1) {
     const id = `goblin-${nest.id}-${index}`; const spawn = nest.spawnTiles[index]!;
     const phaseRandom = randomFor(options.seed ?? 0, `decision:${id}`);
-    states.push({ id, nest, home: { ...spawn }, movement: createMovement(spawn), random: randomFor(options.seed ?? 0, id), phase: 'roaming', targetId: null, lastSeen: null, unseen: 0, decision: index === 0 ? 0 : phaseRandom() * DECISION_INTERVAL, pause: 0, trail: [spawn], trailIndex: new Map([[key(spawn), 0]]), destination: null });
+    states.push({ id, nest, home: { ...spawn }, movement: createMovement(spawn), random: randomFor(options.seed ?? 0, id), phase: 'roaming', targetId: null, lastSeen: null, unseen: 0, decision: index === 0 ? 0 : phaseRandom() * DECISION_INTERVAL, pause: 0, trail: [spawn], trailIndex: new Map([[key(spawn), 0]]), destination: null, battle: null, battleRetry: 0 });
   }
   const chooseTarget = (state: State, targets: readonly GoblinTarget[]) => targets.filter((target) => distanceSquared(state.movement.tile, target.tile) <= DETECTION_RADIUS ** 2).sort((a, b) => distanceSquared(state.movement.tile, a.tile) - distanceSquared(state.movement.tile, b.tile) || a.id.localeCompare(b.id))[0];
   const setRoute = (state: State, route: Point[], destination: Point | null) => { state.movement.route = route; state.destination = destination; state.movement.destination = destination; };
   const pursuitBounds = (a: Point, b: Point): SearchBounds => ({ minCol: Math.max(0, Math.min(a.col, b.col) - ROAM_RADIUS), maxCol: Math.min(tiles.width - 1, Math.max(a.col, b.col) + ROAM_RADIUS), minRow: Math.max(0, Math.min(a.row, b.row) - ROAM_RADIUS), maxRow: Math.min(tiles.height - 1, Math.max(a.row, b.row) + ROAM_RADIUS) });
   const routeTo = (state: State, destination: Point, bounded = false, roaming = false) => {
     if (roaming) getRoamingTiles(state.nest);
-    return findPath(roaming ? { width: tiles.width, height: tiles.height, getTile: (point) => roamingTileData.get(state.nest.id)?.get(key(point)) } : tiles, state.movement.tile, destination, bounded ? pursuitBounds(state.movement.tile, destination) : undefined);
+    return findPath(roaming ? { width: tiles.width, height: tiles.height, getTile: (point) => roamingTileData.get(state.nest.id)?.get(key(point)) } : tiles, state.movement.tile, destination, bounded ? pursuitBounds(state.movement.tile, destination) : undefined, state.battle ? { cardinalOnly: true } : undefined);
   };
   const startReturn = (state: State) => {
     state.phase = 'returning'; state.targetId = null; state.lastSeen = null;
@@ -104,6 +104,15 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
     const route = routeTo(state, destination, false, true); if (route) setRoute(state, route, destination); else state.pause = 1;
   };
   const stepState = (state: State, dt: number, targets: readonly GoblinTarget[]) => {
+    state.battleRetry = Math.max(0, state.battleRetry - dt);
+    if (state.battle) {
+      if (!state.battle.arrived) {
+        const before = { ...state.movement.tile };
+        advanceMovement(state.movement, dt, 5);
+        if (!state.movement.route.length) { state.battle.arrived = true; const dx = state.movement.tile.col - before.col, dy = state.movement.tile.row - before.row; state.battle.approachEdge = Math.abs(dx) >= Math.abs(dy) ? dx >= 0 ? 'west' : 'east' : dy >= 0 ? 'north' : 'south'; }
+      }
+      return;
+    }
     const before = state.movement.tile;
     advanceMovement(state.movement, dt, state.phase === 'pursuing' ? PURSUIT_SPEED : ROAM_SPEED);
     if (key(before) !== key(state.movement.tile)) { const tileKey = key(state.movement.tile); const prior = state.trailIndex.get(tileKey); if (prior !== undefined) { state.trail.length = prior + 1; } else { state.trailIndex.set(tileKey, state.trail.length); state.trail.push({ ...state.movement.tile }); } }
@@ -116,6 +125,14 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
   const tick = (deltaSeconds: number, targets: readonly GoblinTarget[] = []) => { accumulator += Math.min(Math.max(0, deltaSeconds), 0.1); while (accumulator >= 1 / 60) { for (const state of states) stepState(state, 1 / 60, targets); accumulator -= 1 / 60; } };
   const snapshots = () => states.map((state): GoblinSnapshot => ({ id: state.id, nestId: state.nest.id, position: { ...state.movement.position }, tile: { ...state.movement.tile }, facing: state.movement.facing, walking: state.movement.route.length > 0, phase: state.phase, targetId: state.targetId }));
   const remove = (id: string) => { const index = states.findIndex((state) => state.id === id); if (index < 0) return false; states.splice(index, 1); return true; };
+  const removeAll = () => { states.splice(0, states.length); };
   const step = (delta: number, targets: readonly GoblinTarget[] = []) => { for (const state of states) stepState(state, delta, targets); };
-  return { tick, step, snapshots, remove };
+  const respondToBattle = (destination: Point, detect: Point) => { for (const state of states) { if (state.battle || state.battleRetry > 0 || distanceSquared(state.movement.tile, detect) > DETECTION_RADIUS ** 2) continue; const route = findPath(tiles, state.movement.tile, destination, undefined, { cardinalOnly: true }); state.battleRetry = DECISION_INTERVAL; if (route) { setRoute(state, route, destination); state.battle = { destination: { ...destination }, arrived: route.length === 0, approachEdge: 'east' }; } } };
+  const battleResponses = () => states.filter((s) => s.battle).map((s) => ({ id: s.id, arrived: s.battle!.arrived, approachEdge: s.battle!.approachEdge }));
+  const setParticipant = (id: string, value: boolean) => { const state = states.find((s) => s.id === id); if (!state?.battle) return; if (!value) state.battle = null; else state.battle.arrived = true; };
+  const clearBattleResponses = () => { for (const state of states) if (state.battle) {
+    if (state.battle.arrived) startReturn(state);
+    state.battle = null;
+  } };
+  return { tick, step, snapshots, remove, removeAll, respondToBattle, battleResponses, setParticipant, clearBattleResponses };
 }

@@ -56,6 +56,15 @@ describe('controller battle coordination', () => {
     c.tick(0.01);
     expect(c.battle!.combatants['goblin-n-0']!.position).not.toEqual(before);
   });
+  it('advances a fixed three seconds and admits nearby reinforcements at a turn boundary', () => {
+    const c = createGameController(map);
+    c.tick(1 / 60);
+    // The other nest goblins begin adjacent and cover their one-tile route
+    // during the first 180 fixed steps.
+    expect(c.dispatchBattle({ kind: 'end-turn', actorId: 'player' })).toBe(true);
+    expect(c.battle?.log.some((event) => event.kind === 'combatant-joined')).toBe(true);
+    expect(c.battle?.combatants['goblin-n-1']?.eligibleFromRound).toBe(2);
+  });
   it('blocks overworld navigation while battle is active', () => {
     const c = createGameController(map);
     c.tick(1 / 60);
