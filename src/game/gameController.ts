@@ -176,17 +176,11 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     adventurers.clearBattleResponses();
     goblins.clearBattleResponses();
     if (finished.outcome === 'defeat') relocate(checkpoints.resolve());
-    // The terminal action is still a completed turn. Advance ordinary NPC
-    // life, while deliberately suppressing a new encounter until Continue.
-    for (let step = 0; step < 180; step += 1) {
-      adventurers.step(1 / 60);
-      goblins.step(1 / 60, goblinTargets());
-    }
     session = { kind: 'result', encounter, battle: finished };
     aiWait = 0;
     return true;
   };
-  /** Advances exactly three simulated seconds at every completed turn. */
+  /** Advances exactly three simulated seconds at every nonterminal completed turn. */
   const advanceBattleWorld = () => {
     if (session.kind !== 'battle') return;
     const encounter = session.encounter;

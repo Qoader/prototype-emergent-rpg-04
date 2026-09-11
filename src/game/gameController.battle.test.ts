@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createGameController, ENEMY_ACTION_DELAY_SECONDS } from './gameController';
 import type { WorldMap } from './types';
 import { createBattleFixture } from './e2eBattleFixture';
@@ -78,9 +78,15 @@ describe('controller battle coordination', () => {
   it('advances a fixed three seconds and admits nearby reinforcements at a turn boundary', () => {
     const c = createGameController(map);
     c.tick(1 / 60);
+    const adventurerStep = vi.spyOn(c.adventurers, 'step');
+    const goblinStep = vi.spyOn(c.goblins, 'step');
     // The other nest goblins begin adjacent and cover their one-tile route
     // during the first 180 fixed steps.
     expect(c.dispatchBattle({ kind: 'end-turn', actorId: 'player' })).toBe(true);
+    expect(adventurerStep).toHaveBeenCalledTimes(180);
+    expect(goblinStep).toHaveBeenCalledTimes(180);
+    expect(adventurerStep.mock.calls.every(([delta]) => delta === 1 / 60)).toBe(true);
+    expect(goblinStep.mock.calls.every(([delta]) => delta === 1 / 60)).toBe(true);
     expect(c.battle?.log.some((event) => event.kind === 'combatant-joined')).toBe(true);
     expect(c.battle?.combatants['goblin-n-1']?.eligibleFromRound).toBe(2);
   });
@@ -131,6 +137,53 @@ describe('controller battle coordination', () => {
     c.continueFromResult();
     expect(c.goblins.snapshots().some((g) => g.id === 'goblin-n-0')).toBe(false);
   });
+  it('freezes surviving NPCs through a player victory, result ticks, and Continue before exploration resumes', () => {
+    const c = createGameController(reinforcementAndTargetMap);
+    c.startBattleForTest('goblin-battle-0');
+    // Bring the responding adventurer all the way to the fixed encounter
+    // tile before the terminal action. This exercises the arrived-survivor
+    // cleanup path, which prepares its return route without moving it.
+    c.adventurers.step(2);
+    const beforeAdventurers = c.adventurers.snapshots();
+    const arrivedAdventurer = beforeAdventurers.find((adventurer) => adventurer.id === 'adventurer-join');
+    expect(arrivedAdventurer?.tile).toEqual({ col: 1, row: 1 });
+    expect(arrivedAdventurer?.position).toEqual({ x: 1.5, y: 1.5 });
+    const beforeGoblins = c.goblins.snapshots().filter((goblin) => goblin.id !== 'goblin-battle-0');
+    const adventurerStep = vi.spyOn(c.adventurers, 'step');
+    const goblinStep = vi.spyOn(c.goblins, 'step');
+    const battle = c.battle!;
+    battle.combatants.player.position = { col: 4, row: 3 };
+    battle.combatants['goblin-battle-0']!.position = { col: 5, row: 3 };
+    battle.combatants['goblin-battle-0']!.hp = 4;
+
+    expect(c.dispatchBattle({ kind: 'attack', actorId: 'player', targetId: 'goblin-battle-0' })).toBe(true);
+    expect(c.mode).toBe('result');
+    expect(adventurerStep).not.toHaveBeenCalled();
+    expect(goblinStep).not.toHaveBeenCalled();
+    expect(c.adventurers.snapshots().map(({ id, tile, position }) => ({ id, tile, position }))).toEqual(
+      beforeAdventurers.map(({ id, tile, position }) => ({ id, tile, position }))
+    );
+    const arrivedAfterVictory = c.adventurers.snapshots().find((adventurer) => adventurer.id === 'adventurer-join');
+    expect(arrivedAfterVictory?.tile).toEqual({ col: 1, row: 1 });
+    expect(arrivedAfterVictory?.position).toEqual({ x: 1.5, y: 1.5 });
+    expect(c.goblins.snapshots().map(({ id, tile, position }) => ({ id, tile, position }))).toEqual(
+      beforeGoblins.map(({ id, tile, position }) => ({ id, tile, position }))
+    );
+
+    c.tick(30);
+    expect(adventurerStep).not.toHaveBeenCalled();
+    expect(goblinStep).not.toHaveBeenCalled();
+    c.continueFromResult();
+    expect(c.mode).toBe('exploration');
+    expect(adventurerStep).not.toHaveBeenCalled();
+    expect(goblinStep).not.toHaveBeenCalled();
+
+    c.tick(1 / 60);
+    expect(adventurerStep).toHaveBeenCalledTimes(1);
+    expect(goblinStep).toHaveBeenCalledTimes(1);
+    expect(adventurerStep).toHaveBeenLastCalledWith(1 / 60);
+    expect(goblinStep.mock.calls.at(-1)?.[0]).toBe(1 / 60);
+  });
   it('publishes one snapshot for a terminal command and one for Continue', () => {
     const c = createGameController(map);
     const snapshots: string[] = [];
@@ -177,5 +230,38 @@ describe('controller battle coordination', () => {
     c.continueFromResult();
     expect(c.mode).toBe('exploration');
     expect(c.movement.tile).toEqual({ col: 1, row: 1 });
+  });
+  it('does not advance world simulation for an AI-issued defeat', () => {
+    const fixture = createBattleFixture(true, false);
+    const c = createGameController(fixture);
+    c.startBattleForTest('goblin-fixture-nest-0');
+    const battle = c.battle!;
+    battle.combatants.player.position = { col: 4, row: 3 };
+    battle.combatants['goblin-fixture-nest-0']!.position = { col: 5, row: 3 };
+    battle.combatants.player.hp = 3;
+    expect(c.dispatchBattle({ kind: 'end-turn', actorId: 'player' })).toBe(true);
+    const beforeAdventurers = c.adventurers.snapshots();
+    const survivingAdventurer = beforeAdventurers.find((adventurer) => adventurer.id === 'adventurer-fixture-settlement');
+    const beforeGoblins = c.goblins.snapshots();
+    const adventurerStep = vi.spyOn(c.adventurers, 'step');
+    const goblinStep = vi.spyOn(c.goblins, 'step');
+
+    c.tick(ENEMY_ACTION_DELAY_SECONDS);
+
+    expect(c.mode).toBe('result');
+    expect(c.battle?.outcome).toBe('defeat');
+    expect(adventurerStep).not.toHaveBeenCalled();
+    expect(goblinStep).not.toHaveBeenCalled();
+    expect(c.adventurers.snapshots().map(({ id, tile, position }) => ({ id, tile, position }))).toEqual(
+      beforeAdventurers.map(({ id, tile, position }) => ({ id, tile, position }))
+    );
+    const survivingAdventurerAfterDefeat = c.adventurers.snapshots().find(
+      (adventurer) => adventurer.id === 'adventurer-fixture-settlement'
+    );
+    expect(survivingAdventurerAfterDefeat?.tile).toEqual(survivingAdventurer?.tile);
+    expect(survivingAdventurerAfterDefeat?.position).toEqual(survivingAdventurer?.position);
+    expect(c.goblins.snapshots().map(({ id, tile, position }) => ({ id, tile, position }))).toEqual(
+      beforeGoblins.map(({ id, tile, position }) => ({ id, tile, position }))
+    );
   });
 });
