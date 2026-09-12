@@ -1,4 +1,4 @@
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, Container, Graphics, Text } from 'pixi.js';
 import { CHUNK_SIZE, chunkRangeForViewport, tileAt, TILE_SIZE } from './map';
 import type { WorldMap } from './types';
 import type { GameController } from './gameController';
@@ -78,6 +78,7 @@ export function createGameRuntime({
   const world = new Container();
   const groundLayer = new Container();
   const marker = new Graphics();
+  const battleLabels = new Container();
   const depthLayer = new Container();
   depthLayer.sortableChildren = true;
   const player = createPlayerSprite();
@@ -239,7 +240,7 @@ export function createGameRuntime({
         depthLayer.addChild(sprite.view);
         goblinViews.set(snapshot.id, { sprite, time: 0, state: '' });
       }
-      world.addChild(groundLayer, marker, depthLayer);
+      world.addChild(groundLayer, marker, battleLabels, depthLayer);
       const updateCamera = () => {
         camera = cameraForPlayer(
           movement.position,
@@ -262,8 +263,8 @@ export function createGameRuntime({
       let animationTime = 0;
       let lastAnimation: `${PlayerAnimation}:${string}` = 'idle:south';
       const draw = (deltaSeconds = 0) => {
-        const suspendedAdventurers = new Set(controller.adventurers.battleResponses().map((npc) => npc.id));
-        const suspendedGoblins = new Set(controller.goblins.battleResponses().map((npc) => npc.id));
+        const suspendedAdventurers = new Set(controller.adventurers.snapshots().filter((npc) => controller.battles.membership(npc.id)?.stage === 'participating').map((npc) => npc.id));
+        const suspendedGoblins = new Set(controller.goblins.snapshots().filter((npc) => controller.battles.membership(npc.id)?.stage === 'participating').map((npc) => npc.id));
         const walking = movement.route.length > 0;
         const animation: PlayerAnimation = walking ? 'walk' : 'idle';
         animationTime =
@@ -316,6 +317,18 @@ export function createGameRuntime({
           positionWorldCharacter(resource.sprite.view, npc.position);
         }
         marker.clear();
+        battleLabels.removeChildren().forEach((label) => label.destroy());
+        // World battles are simulation-owned.  This renderer only projects
+        // their lightweight summaries, so offscreen fights need no Pixi state.
+        for (const battle of controller.getSnapshot().battles) {
+          const x = battle.tile.col * TILE_SIZE + 24;
+          const y = battle.tile.row * TILE_SIZE + 24;
+          marker.moveTo(x - 9, y - 9).lineTo(x + 9, y + 9).stroke({ color: '#f6d365', width: 3 });
+          marker.moveTo(x + 9, y - 9).lineTo(x - 9, y + 9).stroke({ color: '#f6d365', width: 3 });
+          marker.circle(x, y, 13).stroke({ color: '#612d2d', width: 2, alpha: .9 });
+          const label = new Text({ text: `${battle.adventurers}/${battle.goblins}`, style: { fill: '#fff3b0', fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', stroke: { color: '#241510', width: 2 } } });
+          label.anchor.set(.5, .5); label.position.set(x, y + 18); label.zIndex = y + 20; battleLabels.addChild(label);
+        }
         if (movement.destination)
           marker.circle(0, 0, 8).stroke({ color: '#fff3b0', width: 2, alpha: 0.9 });
         marker.position.set(

@@ -1,4 +1,5 @@
 import { BATTLE_GRID, createCombatant } from './rules';
+import type { BattleCombatant } from './types';
 import { occupied, reachable } from './grid';
 import type { BattleCommand, BattleEvent, BattleState, BattleTransition } from './types';
 import { canAttack } from './legality';
@@ -10,12 +11,24 @@ const clone = (state: BattleState): BattleState => ({
     turnOrder: [...state.turnOrder],
   log: [...state.log]
 });
-export const createBattle = (goblinId: string, scene?: BattleState['scene']): BattleState => {
+/** Create a battle from explicit initial actors.  The legacy string form remains
+ * for callers which create the player/goblin tutorial encounter. */
+export const createBattle = (
+  initial: string | readonly BattleCombatant[],
+  scene?: BattleState['scene']
+): BattleState => {
+  if (typeof initial !== 'string') {
+    const combatants = Object.fromEntries(initial.map((actor) => [actor.id, { ...actor, position: { ...actor.position } }]));
+    const turnOrder = initial.map((actor) => actor.id);
+    const activeId = turnOrder[0] ?? '';
+    return { ...BATTLE_GRID, combatants, turnOrder, activeId, turn: 1, outcome: null, phase: 'acting', log: activeId ? [{ kind: 'turn-start', actorId: activeId, turn: 1 }] : [], scene };
+  }
+  const goblinId = initial;
   const player = createCombatant('player', 'player', { col: 2, row: 4 });
   const goblin = createCombatant(goblinId, 'goblin', { col: 6, row: 4 });
   return {
     ...BATTLE_GRID,
-    combatants: { player: player, [goblinId]: goblin },
+    combatants: { player, [goblinId]: goblin },
     turnOrder: ['player', goblinId],
     activeId: 'player',
     turn: 1,
@@ -41,7 +54,12 @@ export function advanceTurn(state: BattleState, events: BattleEvent[]): void {
     return;
   }
 }
-export function applyBattleCommand(input: BattleState, command: BattleCommand, options: { deferTurn?: boolean } = {}): BattleTransition {
+export const evaluateBattleOutcome = (state: BattleState): BattleState['outcome'] => {
+  const allies = Object.values(state.combatants).some((c) => c.side === 'player' && c.hp > 0);
+  const goblins = Object.values(state.combatants).some((c) => c.side === 'goblin' && c.hp > 0);
+  return !allies ? 'defeat' : !goblins ? 'victory' : null;
+};
+export function applyBattleCommand(input: BattleState, command: BattleCommand, options: { deferTurn?: boolean; deferOutcome?: boolean } = {}): BattleTransition {
   if (input.outcome || input.phase === 'between-turns') return { state: input, error: 'Battle is not accepting commands', events: [] };
   if (command.actorId !== input.activeId)
     return { state: input, error: 'It is not that combatant’s turn', events: [] };
@@ -84,7 +102,7 @@ export function applyBattleCommand(input: BattleState, command: BattleCommand, o
       remainingHp: target.hp
     });
     if (target.hp === 0) {
-      state.outcome = target.id === 'player' ? 'defeat' : Object.values(state.combatants).filter((c) => c.side === 'goblin').every((c) => c.hp === 0) ? 'victory' : null;
+      state.outcome = options.deferOutcome ? null : evaluateBattleOutcome(state);
       if (state.outcome) {
         state.phase = 'finished';
         events.push({ kind: 'turn-ended', actorId: actor.id, turn: state.turn, reason: 'battle-finished' });

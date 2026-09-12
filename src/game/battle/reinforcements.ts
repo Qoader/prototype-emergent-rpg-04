@@ -2,7 +2,7 @@ import type { Point } from '../types';
 import { createCombatant } from './rules';
 import type { BattleCombatant, BattleEvent, BattleState } from './types';
 
-export type BattleArrival = { id: string; kind: 'adventurer' | 'goblin'; approachEdge: 'north' | 'east' | 'south' | 'west'; arrivalStep: number };
+export type BattleArrival = { id: string; kind: 'player' | 'adventurer' | 'goblin'; approachEdge: 'north' | 'east' | 'south' | 'west'; arrivalStep: number };
 const key = (p: Point) => `${p.col},${p.row}`;
 const edges = (state: BattleState, edge: BattleArrival['approachEdge']) => {
   const middle = (n: number) => Math.floor((n - 1) / 2);

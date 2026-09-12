@@ -1,7 +1,7 @@
 import { advanceMovement, createMovement, type Facing } from './movement';
 import { isTraversableRoute } from './domainTiles';
 import type { Point, Settlement, TileReader, WorldMap } from './types';
-export type BattleResponseSnapshot = { id: string; arrived: boolean; approachEdge: 'north' | 'east' | 'south' | 'west' };
+export type BattleResponseSnapshot = { id: string; battleId?: string; arrived: boolean; approachEdge: 'north' | 'east' | 'south' | 'west' };
 
 export type AdventurerPhase = 'roaming' | 'returning' | 'traveling';
 export type AdventurerSnapshot = {
@@ -49,7 +49,7 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
     const id = `adventurer-${settlement.id}`;
     const movement = createMovement({ col: settlement.col, row: settlement.row });
     const random = seeded(map.seed ?? 0, id);
-    return { id, settlement, movement, random, phase: 'roaming' as AdventurerPhase, current: settlement.id as string | null, previous: null as string | null, destination: null as string | null, visit: randomRange(random, 0, 60), pause: 0, target: null as Point | null, finishingRoamStep: false, battle: null as { destination: Point; arrived: boolean; approachEdge: BattleResponseSnapshot['approachEdge'] } | null, battleRetry: 0 };
+    return { id, settlement, movement, random, phase: 'roaming' as AdventurerPhase, current: settlement.id as string | null, previous: null as string | null, destination: null as string | null, visit: randomRange(random, 0, 60), pause: 0, target: null as Point | null, finishingRoamStep: false, battle: null as { battleId?: string; destination: Point; arrived: boolean; approachEdge: BattleResponseSnapshot['approachEdge'] } | null, battleRetry: 0 };
   });
   const localTargets = new Map<string, Point[]>();
   const local = (s: Settlement) => {
@@ -150,8 +150,12 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
       if (route) { state.movement.route = route; state.movement.destination = destination; state.battle = { destination: { ...destination }, arrived: route.length === 0, approachEdge: 'west' }; }
     }
   };
-  const battleResponses = (): BattleResponseSnapshot[] => states.filter((s) => s.battle).map((s) => ({ id: s.id, arrived: s.battle!.arrived, approachEdge: s.battle!.approachEdge }));
+  const battleResponses = (): BattleResponseSnapshot[] => states.filter((s) => s.battle).map((s) => ({ id: s.id, battleId: s.battle!.battleId, arrived: s.battle!.arrived, approachEdge: s.battle!.approachEdge }));
+  const respondToBattleFor = (id: string, battleId: string, destination: Point, suppliedRoute?: Point[]) => { const state = states.find((value) => value.id === id); if (!state || state.battle) return false; const route = suppliedRoute ?? path(reader, state.movement.tile, destination, (p) => reader.getTile(p)?.walkable === true); if (!route || route.length > 64) return false; state.movement.route = route; state.movement.destination = destination; state.battle = { battleId, destination: { ...destination }, arrived: route.length === 0, approachEdge: 'west' }; return true; };
   const setParticipant = (id: string, value: boolean) => { const state = states.find((s) => s.id === id); if (!state?.battle) return; if (!value) state.battle = null; else state.battle.arrived = true; };
+  /** Battle registry hook for combat started by NPC contact (without a global response wave). */
+  const holdForBattle = (id: string) => { const state = states.find((s) => s.id === id); if (!state) return false; state.movement.route = []; state.movement.destination = null; state.battle = { destination: { ...state.movement.tile }, arrived: true, approachEdge: 'west' }; return true; };
+  const releaseBattle = (id: string) => { const state = states.find((s) => s.id === id); if (!state?.battle) return false; state.battle = null; return true; };
   const clearBattleResponses = () => { for (const state of states) if (state.battle) {
     // Arrived allies recover to their associated settlement; incoming NPCs
     // simply continue from the point where the encounter ended.
@@ -164,7 +168,7 @@ export function createAdventurerSimulation(map: WorldMap, reader: TileReader) {
     state.battle = null;
   } };
   const remove = (id: string) => { const index = states.findIndex((state) => state.id === id); if (index < 0) return false; states.splice(index, 1); return true; };
-  return { tick, step, snapshots, respondToBattle, battleResponses, setParticipant, clearBattleResponses, remove };
+  return { tick, step, snapshots, respondToBattle, respondToBattleFor, battleResponses, setParticipant, holdForBattle, releaseBattle, clearBattleResponses, remove };
 }
 
 export type AdventurerSimulation = ReturnType<typeof createAdventurerSimulation>;

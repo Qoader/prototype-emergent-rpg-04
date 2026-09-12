@@ -19,7 +19,7 @@ const randomFor = (seed: number, id: string) => { let value = (seed ^ 2166136261
 
 export function createGoblinSimulation(options: { seed?: number; nests: readonly GoblinNest[]; tiles: TileReader; settlements?: readonly Settlement[] }) {
   const { tiles, settlements = [] } = options;
-  type State = { id: string; nest: GoblinNest; home: Point; movement: Movement; random: () => number; phase: GoblinPhase; targetId: string | null; lastSeen: Point | null; unseen: number; decision: number; pause: number; trail: Point[]; trailIndex: Map<string, number>; destination: Point | null; battle: { destination: Point; arrived: boolean; approachEdge: 'north' | 'east' | 'south' | 'west' } | null; battleRetry: number };
+  type State = { id: string; nest: GoblinNest; home: Point; movement: Movement; random: () => number; phase: GoblinPhase; targetId: string | null; lastSeen: Point | null; unseen: number; decision: number; pause: number; trail: Point[]; trailIndex: Map<string, number>; destination: Point | null; battle: { battleId?: string; destination: Point; arrived: boolean; approachEdge: 'north' | 'east' | 'south' | 'west' } | null; battleRetry: number };
   const states: State[] = [];
   const roamingTiles = new Map<string, Point[]>();
   // The roaming set is static for the lifetime of a world. Keep a keyed
@@ -133,11 +133,15 @@ export function createGoblinSimulation(options: { seed?: number; nests: readonly
   const removeAll = () => { states.splice(0, states.length); };
   const step = (delta: number, targets: readonly GoblinTarget[] = []) => { for (const state of states) stepState(state, delta, targets); };
   const respondToBattle = (destination: Point, detect: Point) => { for (const state of states) { if (state.battle || state.battleRetry > 0 || distanceSquared(state.movement.tile, detect) > DETECTION_RADIUS ** 2) continue; const route = findPath(tiles, state.movement.tile, destination, undefined, { cardinalOnly: true }); state.battleRetry = DECISION_INTERVAL; if (route) { setRoute(state, route, destination); state.battle = { destination: { ...destination }, arrived: route.length === 0, approachEdge: 'east' }; } } };
-  const battleResponses = () => states.filter((s) => s.battle).map((s) => ({ id: s.id, arrived: s.battle!.arrived, approachEdge: s.battle!.approachEdge }));
+  const battleResponses = () => states.filter((s) => s.battle).map((s) => ({ id: s.id, battleId: s.battle!.battleId, arrived: s.battle!.arrived, approachEdge: s.battle!.approachEdge }));
+  const respondToBattleFor = (id: string, battleId: string, destination: Point, suppliedRoute?: Point[]) => { const state = states.find((value) => value.id === id); if (!state || state.battle) return false; const route = suppliedRoute ?? findPath(tiles, state.movement.tile, destination, undefined, { cardinalOnly: true }); if (!route || route.length > 64) return false; setRoute(state, route, destination); state.battle = { battleId, destination: { ...destination }, arrived: route.length === 0, approachEdge: 'east' }; return true; };
   const setParticipant = (id: string, value: boolean) => { const state = states.find((s) => s.id === id); if (!state?.battle) return; if (!value) state.battle = null; else state.battle.arrived = true; };
+  /** Freeze one registry participant without committing unrelated goblins. */
+  const holdForBattle = (id: string) => { const state = states.find((s) => s.id === id); if (!state) return false; setRoute(state, [], null); state.battle = { destination: { ...state.movement.tile }, arrived: true, approachEdge: 'east' }; return true; };
+  const releaseBattle = (id: string) => { const state = states.find((s) => s.id === id); if (!state?.battle) return false; state.battle = null; return true; };
   const clearBattleResponses = () => { for (const state of states) if (state.battle) {
     if (state.battle.arrived) startReturn(state);
     state.battle = null;
   } };
-  return { tick, step, snapshots, remove, removeAll, respondToBattle, battleResponses, setParticipant, clearBattleResponses };
+  return { tick, step, snapshots, remove, removeAll, respondToBattle, respondToBattleFor, battleResponses, setParticipant, holdForBattle, releaseBattle, clearBattleResponses };
 }

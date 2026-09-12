@@ -5,309 +5,222 @@ import { acceptsPointer, tilePointFromPointer } from './input';
 import { createAdventurerSimulation } from './adventurers';
 import { tileAt } from './map';
 import { createGoblinSimulation } from './goblins';
-import { advanceTurn, applyBattleCommand, createBattle } from './battle/engine';
+import { advanceTurn, applyBattleCommand, createBattle, evaluateBattleOutcome } from './battle/engine';
 import { chooseGoblinCommand } from './battle/ai';
-import { admitReinforcements, type BattleArrival } from './battle/reinforcements';
-import type { BattleCommand, BattleState, BattleNotice } from './battle/types';
+import { admitReinforcements } from './battle/reinforcements';
+import { createCombatant } from './battle/rules';
+import type { BattleCommand, BattleState, BattleNotice, BattleEvent } from './battle/types';
 import { initialBattleNotice, reduceBattleNotice } from './battle/notice';
-import { findGoblinContact } from './encounters';
 import { createCheckpointTracker } from './checkpoints';
 import { fortificationOrientation, fortificationPalette } from './tileIllustration';
+import { createWorldBattleRegistry, type BattleId, type BattleSummary, type WorldBattle } from './worldBattles';
+import { advanceRouteField, createRouteField, routeKey, type RouteField } from './battleRoutes';
+
 export type GameMode = 'exploration' | 'battle' | 'result';
 export type Encounter = { goblinId: string; tile: Point };
-export type SessionState =
-  | { kind: 'exploration' }
-  | { kind: 'battle'; encounter: Encounter; battle: BattleState }
-  | { kind: 'result'; encounter: Encounter; battle: BattleState };
-export type PointerInput = {
-  clientX: number;
-  clientY: number;
-  pointerType: string;
-  button: number;
-  rect: { left: number; top: number };
-  camera: { x: number; y: number };
-};
-export type GameSnapshot = {
-  mode: GameMode;
-  battle: BattleState | null;
-  battleBusy: boolean;
-  battleNotice: BattleNotice | null;
-};
+type SessionState = { kind: 'exploration' } | { kind: 'battle'; battleId: BattleId } | { kind: 'result'; battle: BattleState };
+export type PointerInput = { clientX: number; clientY: number; pointerType: string; button: number; rect: { left: number; top: number }; camera: { x: number; y: number } };
+export type GameSnapshot = { mode: GameMode; battle: BattleState | null; battleBusy: boolean; battleNotice: BattleNotice | null; battles: BattleSummary[]; selectedBattleId: BattleId | null; playerEntry: 'waiting' | 'admitted' | null };
 export const ENEMY_ACTION_DELAY_SECONDS = 0.9;
+const STEP = 1 / 60;
+const tileEqual = (a: Point, b: Point) => a.col === b.col && a.row === b.row;
+
 export function createGameController(map: WorldMap, tiles?: TileReader) {
   const movement = createMovement(map.spawn);
-  const reader = tiles ?? {
-    width: map.width,
-    height: map.height,
-    getTile: (point: Point) => tileAt(map, point)
-  };
+  const reader = tiles ?? { width: map.width, height: map.height, getTile: (point: Point) => tileAt(map, point) };
   const adventurers = createAdventurerSimulation(map, reader);
-  const goblins = createGoblinSimulation({
-    seed: map.seed,
-    nests: map.goblinNests ?? [],
-    tiles: reader,
-    settlements: map.settlements
-  });
+  const goblins = createGoblinSimulation({ seed: map.seed, nests: map.goblinNests ?? [], tiles: reader, settlements: map.settlements });
+  const registry = createWorldBattleRegistry();
+  const checkpoints = createCheckpointTracker(map.spawn, map.settlements ?? [], reader);
+  const listeners = new Set<(snapshot: GameSnapshot) => void>();
   let session: SessionState = { kind: 'exploration' };
   let battleNotice: BattleNotice | null = null;
-  let aiWait = 0;
   let battlePlayback: ReturnType<typeof createMovement> | undefined;
-  let battlePlaybackActor = 'player';
-  let battlePlaybackElapsed = 0;
-  let reinforcementStep = 0;
-  let waitingReinforcements: BattleArrival[] = [];
-  const listeners = new Set<(snapshot: GameSnapshot) => void>();
-  const checkpoints = createCheckpointTracker(map.spawn, map.settlements ?? [], reader);
+  let battlePlaybackActor = 'player'; let battlePlaybackElapsed = 0; let worldStep = 0;
+  const routeFields = new Map<BattleId, RouteField>();
+  const newField = (tile: Point): RouteField => createRouteField(tile);
+  const fieldFor = (battle: WorldBattle) => { let field = routeFields.get(battle.id); if (!field) { field = newField(battle.tile); routeFields.set(battle.id, field); } return field; };
+  const advanceFields = () => {
+    let budget = 512;
+    for (const battle of registry.all().sort((a, b) => a.id.localeCompare(b.id))) {
+      const field = fieldFor(battle);
+      budget -= advanceRouteField(field, reader, budget);
+      if (!budget) break;
+    }
+  };
+  const selected = () => session.kind === 'battle' ? registry.get(session.battleId) : undefined;
+  const sceneAt = (contact: Point): BattleState['scene'] | undefined => {
+    const source = reader.getTile(contact); if (!source) return undefined;
+    const route = (p: Point) => ['road', 'bridge', 'gate'].includes(reader.getTile(p)?.kind ?? '');
+    return { appearance: { tile: structuredClone(source), seed: Math.abs((contact.col * 13 + contact.row * 7) % 11), connections: { north: route({ col: contact.col, row: contact.row - 1 }), east: route({ col: contact.col + 1, row: contact.row }), south: route({ col: contact.col, row: contact.row + 1 }), west: route({ col: contact.col - 1, row: contact.row }) }, fortificationOrientation: fortificationOrientation(source, map), palette: fortificationPalette(source, map) } };
+  };
   const snapshot = (): GameSnapshot => {
-    if (session.kind === 'exploration')
-      return { mode: session.kind, battle: null, battleBusy: false, battleNotice: null };
-    const battle = structuredClone(session.battle);
-    if (battlePlayback)
-      battle.visual = {
-        [battlePlaybackActor]: {
-          x: battlePlayback.position.x,
-          y: battlePlayback.position.y,
-          facing: battlePlayback.facing,
-          moving: battlePlayback.route.length > 0,
-          elapsed: battlePlaybackElapsed
-        }
-      };
-    return { mode: session.kind, battle, battleBusy: Boolean(battlePlayback), battleNotice };
+    const active = selected(); const battle = active ? structuredClone(active.battle) : session.kind === 'result' ? structuredClone(session.battle) : null;
+    if (battle && battlePlayback) battle.visual = { [battlePlaybackActor]: { x: battlePlayback.position.x, y: battlePlayback.position.y, facing: battlePlayback.facing, moving: battlePlayback.route.length > 0, elapsed: battlePlaybackElapsed } };
+    const member = registry.membership('player');
+    const playerEntry = member && member.battleId === active?.id ? member.stage === 'participating' ? 'admitted' : 'waiting' : null;
+    return { mode: session.kind, battle, battleBusy: Boolean(battlePlayback), battleNotice, battles: registry.summaries(), selectedBattleId: active?.id ?? null, playerEntry };
   };
-  const notify = () => {
-    const value = snapshot();
-    listeners.forEach((listener) => listener(value));
+  const notify = () => { const value = snapshot(); listeners.forEach((listener) => listener(value)); };
+  const relocate = (point: Point) => { movement.tile = { ...point }; movement.position = { x: point.col + .5, y: point.row + .5 }; movement.route = []; movement.destination = null; };
+  const npcTargets = () => [
+    ...(registry.membership('player') ? [] : [{ id: 'player', kind: 'player' as const, tile: movement.tile, position: { ...movement.position } }]),
+    ...adventurers.snapshots().filter((a) => !registry.membership(a.id)).map((a) => ({ id: a.id, kind: 'adventurer' as const, tile: a.tile, position: a.position }))
+  ];
+  const beginPlayerBattle = (goblinId: string, tile = movement.tile) => {
+    if (registry.membership('player')) return registry.at(tile);
+    relocate(tile); const value = registry.create(tile, createBattle(goblinId, sceneAt(tile)));
+    goblins.holdForBattle(goblinId); session = { kind: 'battle', battleId: value.id }; battleNotice = initialBattleNotice(); advanceFields(); assignResponders();
+    return value;
   };
-  const relocate = (point: Point) => {
-    movement.tile = { ...point };
-    movement.position = { x: point.col + 0.5, y: point.row + 0.5 };
-    movement.route = [];
-    movement.destination = null;
+  const beginNpcBattle = (tile: Point, adventurerId: string, goblinId: string) => {
+    if (registry.at(tile) || registry.membership(adventurerId) || registry.membership(goblinId)) return;
+    const battle = createBattle([createCombatant(adventurerId, 'player', { col: 2, row: 4 }, 'adventurer'), createCombatant(goblinId, 'goblin', { col: 6, row: 4 })], sceneAt(tile));
+    registry.create(tile, battle); adventurers.holdForBattle(adventurerId); goblins.holdForBattle(goblinId);
   };
-  const goblinTargets = (excludeBattleCommitments = false) => {
-    const excluded = new Set<string>();
-    if (excludeBattleCommitments) {
-      for (const response of adventurers.battleResponses()) excluded.add(response.id);
-      if (session.kind === 'battle')
-        for (const combatant of Object.values(session.battle.combatants))
-          if (combatant.kind === 'adventurer') excluded.add(combatant.id);
+  const joinBattle = (value: WorldBattle) => {
+    if (registry.membership('player')) return;
+    movement.route = []; movement.destination = null;
+    registry.queue(value.id, { id: 'player', kind: 'player', approachEdge: 'west', arrivalStep: worldStep });
+    session = { kind: 'battle', battleId: value.id }; battleNotice = { message: 'Joining the battle at the next turn boundary.', revision: 0, role: 'status' };
+  };
+  const resolveContacts = () => {
+    const here = registry.at(movement.tile); if (here && !registry.membership('player')) { joinBattle(here); return; }
+    if (!registry.membership('player')) {
+      const goblin = goblins.snapshots().filter((g) => tileEqual(g.tile, movement.tile) && !registry.membership(g.id)).sort((a,b) => a.id.localeCompare(b.id))[0];
+      if (goblin) { beginPlayerBattle(goblin.id); return; }
     }
-    return [
-      { id: 'player', kind: 'player' as const, tile: movement.tile, position: { ...movement.position } },
-      ...adventurers.snapshots().filter((npc) => !excluded.has(npc.id)).map((npc) => ({
-        id: npc.id,
-        kind: 'adventurer' as const,
-        tile: npc.tile,
-        position: npc.position
-      }))
-    ];
+    // Arriving alone at an occupied battle tile is still a reinforcement.
+    for (const actor of adventurers.snapshots()) if (!registry.membership(actor.id)) { const battle = registry.at(actor.tile); if (battle && registry.queue(battle.id, { id: actor.id, kind: 'adventurer', approachEdge: 'west', arrivalStep: worldStep })) adventurers.holdForBattle(actor.id); }
+    for (const actor of goblins.snapshots()) if (!registry.membership(actor.id)) { const battle = registry.at(actor.tile); if (battle && registry.queue(battle.id, { id: actor.id, kind: 'goblin', approachEdge: 'east', arrivalStep: worldStep })) goblins.holdForBattle(actor.id); }
+    const buckets = new Map<string, { tile: Point; adventurers: string[]; goblins: string[] }>();
+    for (const a of adventurers.snapshots()) if (!registry.membership(a.id)) { const key = `${a.tile.col},${a.tile.row}`; const b = buckets.get(key) ?? { tile: a.tile, adventurers: [], goblins: [] }; b.adventurers.push(a.id); buckets.set(key,b); }
+    for (const g of goblins.snapshots()) if (!registry.membership(g.id)) { const key = `${g.tile.col},${g.tile.row}`; const b = buckets.get(key) ?? { tile: g.tile, adventurers: [], goblins: [] }; b.goblins.push(g.id); buckets.set(key,b); }
+    for (const bucket of [...buckets.values()].sort((a,b) => a.tile.row-b.tile.row || a.tile.col-b.tile.col)) {
+      if (!bucket.adventurers.length || !bucket.goblins.length) continue;
+      beginNpcBattle(bucket.tile, bucket.adventurers.sort()[0]!, bucket.goblins.sort()[0]!);
+      const battle = registry.at(bucket.tile); if (!battle) continue;
+      for (const id of bucket.adventurers.slice(1)) if (registry.queue(battle.id, { id, kind: 'adventurer', approachEdge: 'west', arrivalStep: worldStep })) adventurers.holdForBattle(id);
+      for (const id of bucket.goblins.slice(1)) if (registry.queue(battle.id, { id, kind: 'goblin', approachEdge: 'east', arrivalStep: worldStep })) goblins.holdForBattle(id);
+    }
   };
-  const beginBattle = (id: string) => {
-    if (session.kind !== 'exploration') return;
-    movement.route = [];
-    movement.destination = null;
-    relocate(movement.tile);
-    const contact = { ...movement.tile };
-    const source = reader.getTile(contact);
-    const route = (p: Point) => {
-      const kind = reader.getTile(p)?.kind;
-      return kind === 'road' || kind === 'bridge' || kind === 'gate';
+  const assignResponders = () => {
+    if (map.disableBattleResponses) return;
+    const choose = (actor: { id: string; tile: Point }, kind: 'adventurer' | 'goblin') => {
+      if (registry.membership(actor.id)) return;
+      const nearby = registry.all().filter((battle) => (actor.tile.col - battle.tile.col) ** 2 + (actor.tile.row - battle.tile.row) ** 2 <= 64);
+      // A partial field only proves one route exists; another nearby battle
+      // may still reveal a shorter route. Wait for exact bounded distances.
+      if (nearby.some((battle) => !fieldFor(battle).done)) return;
+      const candidates = nearby.map((battle) => ({ battle, field: fieldFor(battle), distance: fieldFor(battle).distances.get(routeKey(actor.tile)) })).filter((candidate) => candidate.distance !== undefined && candidate.distance! <= 64).sort((a, b) => a.distance! - b.distance! || a.battle.id.localeCompare(b.battle.id));
+      const best = candidates[0]; if (!best) return;
+      const route: Point[] = []; let cursor = { ...actor.tile };
+      while (!tileEqual(cursor, best.battle.tile)) { const next = best.field.next.get(routeKey(cursor)); if (!next) return; route.push({ ...next }); cursor = next; }
+      const accepted = kind === 'adventurer' ? adventurers.respondToBattleFor(actor.id, best.battle.id, best.battle.tile, route) : goblins.respondToBattleFor(actor.id, best.battle.id, best.battle.tile, route);
+      if (accepted) registry.queue(best.battle.id, { id: actor.id, kind, approachEdge: kind === 'adventurer' ? 'west' : 'east', arrivalStep: worldStep }, best.distance! ? 'traveling' : 'waiting');
     };
-    const scene = source
-      ? {
-          appearance: {
-            tile: structuredClone(source),
-            seed: Math.abs((contact.col * 13 + contact.row * 7) % 11),
-            connections: {
-              north: route({ col: contact.col, row: contact.row - 1 }),
-              east: route({ col: contact.col + 1, row: contact.row }),
-              south: route({ col: contact.col, row: contact.row + 1 }),
-              west: route({ col: contact.col - 1, row: contact.row })
-            },
-            fortificationOrientation: fortificationOrientation(source, map),
-            palette: fortificationPalette(source, map)
-          }
-        }
-      : undefined;
-    session = {
-      kind: 'battle',
-      encounter: { goblinId: id, tile: contact },
-      battle: createBattle(id, scene)
-    };
-    battleNotice = initialBattleNotice();
-    reinforcementStep = 0;
-    waitingReinforcements = [];
-    // NPCs perceive the fixed encounter tile and retain that commitment.
-    if (!map.disableBattleResponses) {
-      adventurers.respondToBattle(contact, contact);
-      goblins.respondToBattle(contact, contact);
-    }
-    goblins.setParticipant(id, true);
-    aiWait = 0;
-    notify();
+    for (const actor of adventurers.snapshots()) choose(actor, 'adventurer');
+    for (const actor of goblins.snapshots()) choose(actor, 'goblin');
   };
-  const checkContact = () => {
-    const id = findGoblinContact(movement.tile, goblins.snapshots());
-    if (id) beginBattle(id);
+  const admit = (value: WorldBattle) => {
+    const ready = value.arrivals.filter((arrival) => registry.membership(arrival.id)?.stage !== 'traveling');
+    const traveling = value.arrivals.filter((arrival) => registry.membership(arrival.id)?.stage === 'traveling');
+    const events: BattleEvent[] = []; value.arrivals = [...traveling, ...admitReinforcements(value.battle, ready, events)];
+    for (const event of events) if (event.kind === 'combatant-joined') { registry.setStage(event.actorId, 'participating'); if (value.id === selected()?.id) battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), [event]); }
+    if (events.length) value.battle.log = [...value.battle.log, ...events].slice(-50);
   };
-  const requestDestination = (requested: Point) => {
-    if (session.kind !== 'exploration') return null;
-    const plan = planNavigation(reader, movement.tile, requested);
-    if (!plan) return null;
-    movement.route = plan.route;
-    movement.destination = plan.destination;
-    return plan.destination;
+  const cleanup = (value: WorldBattle) => {
+    const actorIds = [...Object.keys(value.battle.combatants), ...value.arrivals.map((arrival) => arrival.id)];
+    for (const c of Object.values(value.battle.combatants)) if (c.hp <= 0) { if (c.kind === 'goblin') goblins.remove(c.id); else if (c.kind === 'adventurer') adventurers.remove(c.id); }
+    registry.remove(value.id); routeFields.delete(value.id);
+    if (registry.all().length === 0) { adventurers.clearBattleResponses(); goblins.clearBattleResponses(); }
+    else for (const id of actorIds) { adventurers.releaseBattle(id); goblins.releaseBattle(id); }
   };
-  const pointerDown = (input: PointerInput) =>
-    acceptsPointer(input.pointerType, input.button)
-      ? requestDestination(tilePointFromPointer(input))
-      : null;
-  // Resolve a terminal battle as part of the same synchronous transition as
-  // the command. The caller publishes one committed snapshot afterwards.
-  const finish = () => {
-    if (session.kind !== 'battle' || !session.battle.outcome) return false;
-    const { encounter, battle: finished } = session;
-    for (const combatant of Object.values(finished.combatants)) {
-      if (combatant.hp > 0) continue;
-      if (combatant.kind === 'goblin') goblins.remove(combatant.id);
-      if (combatant.kind === 'adventurer') adventurers.remove(combatant.id);
-    }
-    if (map.removeGoblinsAfterBattle) goblins.removeAll();
-    adventurers.clearBattleResponses();
-    goblins.clearBattleResponses();
-    if (finished.outcome === 'defeat') relocate(checkpoints.resolve());
-    session = { kind: 'result', encounter, battle: finished };
-    aiWait = 0;
+  const complete = (value: WorldBattle) => {
+    if (!value.battle.outcome) return false;
+    const isSelected = selected()?.id === value.id; const playerDead = value.battle.combatants.player?.hp === 0; const result = structuredClone(value.battle); cleanup(value);
+    if (isSelected) { if (playerDead) relocate(checkpoints.resolve()); session = { kind: 'result', battle: result }; battleNotice = null; }
     return true;
   };
-  /** Advances exactly three simulated seconds at every nonterminal completed turn. */
-  const advanceBattleWorld = () => {
-    if (session.kind !== 'battle') return;
-    const encounter = session.encounter;
-    const joined = new Set(Object.keys(session.battle.combatants));
-    for (let index = 0; index < 180; index += 1) {
-      reinforcementStep += 1;
-      // Newly-visible NPCs commit during this interval; committed ones never
-      // depend on the radius check again.
-      if (!map.disableBattleResponses) {
-        adventurers.respondToBattle(encounter.tile, encounter.tile);
-        goblins.respondToBattle(encounter.tile, encounter.tile);
-      }
-      adventurers.step(1 / 60);
-      goblins.step(1 / 60, goblinTargets(true));
-      for (const response of adventurers.battleResponses())
-        if (response.arrived && !joined.has(response.id) && !waitingReinforcements.some((x) => x.id === response.id))
-          waitingReinforcements.push({ ...response, kind: 'adventurer', arrivalStep: reinforcementStep });
-      for (const response of goblins.battleResponses())
-        if (response.arrived && !joined.has(response.id) && response.id !== encounter.goblinId && !waitingReinforcements.some((x) => x.id === response.id))
-          waitingReinforcements.push({ ...response, kind: 'goblin', arrivalStep: reinforcementStep });
-    }
-    const events: import('./battle/types').BattleEvent[] = [];
-    waitingReinforcements = admitReinforcements(session.battle, waitingReinforcements, events);
-    for (const event of events) {
-      if (event.kind !== 'combatant-joined') continue;
-      if (session.battle.combatants[event.actorId]?.kind === 'goblin') goblins.setParticipant(event.actorId, true);
-      else adventurers.setParticipant(event.actorId, true);
-    }
-    advanceTurn(session.battle, events);
-    session.battle.log = [...session.battle.log, ...events].slice(-50);
-    battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), events);
+  const playerDefeated = (value: WorldBattle) => {
+    const player = value.battle.combatants.player;
+    if (!player || player.hp > 0) return false;
+    const result = structuredClone(value.battle); result.outcome = 'defeat'; result.phase = 'finished';
+    delete value.battle.combatants.player;
+    value.battle.turnOrder = value.battle.turnOrder.filter((id) => id !== 'player');
+    registry.release('player'); relocate(checkpoints.resolve());
+    // Allies can keep a live battle alive after the player has been removed.
+    value.battle.outcome = evaluateBattleOutcome(value.battle);
+    if (value.battle.outcome) cleanup(value); else if (value.battle.activeId === 'player') advanceTurn(value.battle, []);
+    session = { kind: 'result', battle: result }; battleNotice = null;
+    return true;
   };
+  const resolveBoundary = (value: WorldBattle) => {
+    admit(value);
+    const outcome = evaluateBattleOutcome(value.battle);
+    if (outcome) { value.battle.outcome = outcome; value.battle.phase = 'finished'; complete(value); return; }
+    advanceTurn(value.battle, []);
+  };
+  const finishTurn = (value: WorldBattle) => { resolveBoundary(value); };
+  const advanceBackground = (dt: number, skip?: BattleId) => {
+    for (const value of registry.all()) {
+      if (value.id === skip || value.battle.outcome) continue;
+      admit(value); const actor = value.battle.combatants[value.battle.activeId]; if (actor?.control !== 'ai') continue;
+      value.aiWait += dt; if (value.aiWait < ENEMY_ACTION_DELAY_SECONDS) continue; value.aiWait = 0;
+      const first = applyBattleCommand(value.battle, chooseGoblinCommand(value.battle), { deferTurn: true, deferOutcome: true });
+      if (!('error' in first)) { value.battle = first.state; if (first.events.some((e) => e.kind === 'turn-ended') || first.events.some((e) => e.kind === 'attack' && e.remainingHp === 0)) finishTurn(value); }
+    }
+  };
+  const collectResponses = (value: WorldBattle) => {
+    for (const response of adventurers.battleResponses())
+      if (response.battleId === value.id)
+      if (!registry.membership(response.id)) registry.queue(value.id, { ...response, kind: 'adventurer', arrivalStep: worldStep }, response.arrived ? 'waiting' : 'traveling');
+    for (const response of goblins.battleResponses())
+      if (response.battleId === value.id)
+      if (!registry.membership(response.id) && response.id !== value.battle.turnOrder.find((id) => value.battle.combatants[id]?.kind === 'goblin'))
+        registry.queue(value.id, { ...response, kind: 'goblin', arrivalStep: worldStep }, response.arrived ? 'waiting' : 'traveling');
+    // Travelers are represented in the registry from commitment time; once
+    // their simulation reports arrival they become eligible for placement.
+    for (const response of [...adventurers.battleResponses(), ...goblins.battleResponses()]) {
+      const member = registry.membership(response.id);
+      if (!member || member.battleId !== value.id || !response.arrived) continue;
+      if (value.battle.combatants[response.id]) continue;
+      registry.setStage(response.id, 'waiting');
+      if (!value.arrivals.some((arrival) => arrival.id === response.id))
+        value.arrivals.push({ ...response, kind: response.id.startsWith('goblin-') ? 'goblin' : 'adventurer', arrivalStep: worldStep });
+    }
+  };
+  const advanceWorld = (seconds: number, selectedId?: BattleId) => {
+    const steps = Math.round(seconds / STEP);
+    for (let index = 0; index < steps && session.kind !== 'result'; index += 1) { const dt = STEP; worldStep++; advanceMovement(movement, dt); checkpoints.visit(movement.tile); resolveContacts(); advanceFields(); assignResponders(); adventurers.step(dt); goblins.step(dt, npcTargets()); for (const value of registry.all()) collectResponses(value); resolveContacts(); advanceFields(); assignResponders(); advanceBackground(dt, selectedId); }
+  };
+  const requestDestination = (requested: Point) => { if (session.kind !== 'exploration') return null; const plan = planNavigation(reader, movement.tile, requested); if (!plan) return null; movement.route = plan.route; movement.destination = plan.destination; return plan.destination; };
+  const pointerDown = (input: PointerInput) => acceptsPointer(input.pointerType, input.button) ? requestDestination(tilePointFromPointer(input)) : null;
   const apply = (command: BattleCommand) => {
-    if (session.kind !== 'battle' || battlePlayback) return false;
-    const transition = applyBattleCommand(session.battle, command, { deferTurn: true });
-    if ('error' in transition) return false;
-    battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), transition.events);
-    session = { ...session, battle: transition.state };
-    const move = transition.events.find(
-      (event): event is Extract<typeof event, { kind: 'move' }> => event.kind === 'move'
-    );
-    if (move) {
-      battlePlaybackActor = move.actorId;
-      battlePlaybackElapsed = 0;
-      battlePlayback = createMovement(move.from);
-      battlePlayback.route = move.path.slice(1).map((point) => ({ ...point }));
-      battlePlayback.destination = { ...move.to };
-    }
-    const ended = transition.events.some((event) => event.kind === 'turn-ended');
-    if (session.kind === 'battle' && session.battle.outcome) finish();
-    else if (session.kind === 'battle' && ended) advanceBattleWorld();
-    if (session.kind === 'battle' && session.battle.combatants[session.battle.activeId]?.control === 'ai') aiWait = 0;
-    notify();
-    return true;
+    const value = selected(); if (!value || battlePlayback) return false;
+    const transition = applyBattleCommand(value.battle, command, { deferTurn: true, deferOutcome: true }); if ('error' in transition) return false;
+    value.battle = transition.state; battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), transition.events);
+    const move = transition.events.find((event): event is Extract<BattleEvent, { kind: 'move' }> => event.kind === 'move');
+    if (move) { battlePlaybackActor = move.actorId; battlePlaybackElapsed = 0; battlePlayback = createMovement(move.from); battlePlayback.route = move.path.slice(1); battlePlayback.destination = move.to; }
+    if (playerDefeated(value)) { notify(); return true; }
+    if (transition.events.some((event) => event.kind === 'attack' && event.remainingHp === 0)) resolveBoundary(value);
+    else if (transition.events.some((event) => event.kind === 'turn-ended')) { advanceWorld(3, value.id); if (selected()?.id === value.id) finishTurn(value); }
+    notify(); return true;
   };
   const tick = (deltaSeconds: number) => {
-    const elapsed = Math.max(0, deltaSeconds);
-    if (session.kind !== 'exploration') {
-      if (battlePlayback) {
-        battlePlaybackElapsed += elapsed;
-        advanceMovement(battlePlayback, elapsed, 6);
-        if (!battlePlayback.route.length) battlePlayback = undefined;
-        notify();
-        return;
-      }
-      if (
-        session.kind === 'battle' &&
-        session.battle.combatants[session.battle.activeId]?.control === 'ai' &&
-        !session.battle.outcome
-      ) {
-        aiWait += elapsed;
-        if (aiWait >= ENEMY_ACTION_DELAY_SECONDS) {
-          aiWait = 0;
-          apply(chooseGoblinCommand(session.battle));
-        }
-      }
+    const elapsed = Math.max(0, deltaSeconds); if (session.kind === 'result') return;
+    if (session.kind === 'battle') {
+      const value = selected(); if (!value) { session = { kind: 'exploration' }; return; }
+      if (battlePlayback) { battlePlaybackElapsed += elapsed; advanceMovement(battlePlayback, elapsed, 6); if (!battlePlayback.route.length) battlePlayback = undefined; notify(); return; }
+      admit(value); const actor = value.battle.combatants[value.battle.activeId];
+      if (actor?.control === 'ai') { value.aiWait += elapsed; if (value.aiWait + 1e-9 >= ENEMY_ACTION_DELAY_SECONDS) { value.aiWait = 0; const result = applyBattleCommand(value.battle, chooseGoblinCommand(value.battle), { deferTurn: true, deferOutcome: true }); if (!('error' in result)) { value.battle = result.state; if (playerDefeated(value)) { notify(); return; } if (result.events.some((e) => e.kind === 'turn-ended') || result.events.some((e) => e.kind === 'attack' && e.remainingHp === 0)) finishTurn(value); notify(); } } }
       return;
     }
-    checkContact();
-    if (session.kind !== 'exploration') return;
-    if (!elapsed) {
-      advanceMovement(movement, 0);
-      return;
-    }
-    let remaining = elapsed;
-    const step = 1 / 60;
-    while (remaining > 0 && session.kind === 'exploration') {
-      const dt = Math.min(step, remaining);
-      advanceMovement(movement, dt);
-      checkpoints.visit(movement.tile);
-      checkContact();
-      if (session.kind !== 'exploration') break;
-      adventurers.step(dt);
-      goblins.step(dt, goblinTargets());
-      checkContact();
-      remaining -= dt;
-    }
+    if (!elapsed) { advanceMovement(movement, 0); resolveContacts(); return; }
+    advanceWorld(elapsed); notify();
   };
-  const continueFromResult = () => {
-    if (session.kind !== 'result') return;
-    session = { kind: 'exploration' };
-    notify();
-  };
-  const subscribe = (listener: (snapshot: GameSnapshot) => void) => {
-    listeners.add(listener);
-    listener(snapshot());
-    return () => listeners.delete(listener);
-  };
-  return {
-    movement,
-    pointerDown,
-    requestDestination,
-    tick,
-    adventurers,
-    goblins,
-    checkpoints,
-    startBattleForTest: beginBattle,
-    get mode() {
-      return session.kind;
-    },
-    get battle() {
-      return session.kind === 'exploration' ? null : session.battle;
-    },
-    dispatchBattle: apply,
-    continueFromResult,
-    subscribe,
-    getSnapshot: snapshot
-  };
+  const continueFromResult = () => { if (session.kind !== 'result') return; session = { kind: 'exploration' }; notify(); };
+  const subscribe = (listener: (snapshot: GameSnapshot) => void) => { listeners.add(listener); listener(snapshot()); return () => listeners.delete(listener); };
+  return { movement, pointerDown, requestDestination, tick, adventurers, goblins, checkpoints, battles: registry, startBattleForTest: (id: string) => beginPlayerBattle(id), get mode() { return session.kind; }, get battle() { return selected()?.battle ?? (session.kind === 'result' ? session.battle : null); }, dispatchBattle: apply, continueFromResult, subscribe, getSnapshot: snapshot };
 }
 export type GameController = ReturnType<typeof createGameController>;

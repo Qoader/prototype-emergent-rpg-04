@@ -227,6 +227,7 @@
   };
   $: canAct = Boolean(
     battle &&
+    battle.combatants.player?.hp > 0 &&
     !battle.outcome &&
     battle.activeId === 'player' &&
     !battleBusy &&
@@ -287,7 +288,9 @@
           ? `You ${battle.outcome}.`
           : battle.activeId === 'player'
             ? 'Your turn'
-            : 'Goblin turn'}
+            : battle.combatants[battle.activeId]?.kind === 'adventurer'
+              ? 'Adventurer turn'
+              : 'Goblin turn'}
       </p>
       <div class="stats">
         <span
