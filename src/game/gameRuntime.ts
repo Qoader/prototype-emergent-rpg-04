@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Text } from 'pixi.js';
+import { Application, Container, Graphics } from 'pixi.js';
 import { CHUNK_SIZE, chunkRangeForViewport, tileAt, TILE_SIZE } from './map';
 import type { WorldMap } from './types';
 import type { GameController } from './gameController';
@@ -20,6 +20,8 @@ import {
   fortificationSectionZIndex,
   overhangZIndex
 } from './tileIllustration';
+import { createWorldBattleView, type WorldBattleView } from './worldBattleRendering';
+import type { BattleId } from './worldBattles';
 
 export type GameRuntimeOptions = {
   host: HTMLElement;
@@ -78,8 +80,8 @@ export function createGameRuntime({
   const world = new Container();
   const groundLayer = new Container();
   const marker = new Graphics();
-  const battleLabels = new Container();
   const depthLayer = new Container();
+  const battleOverlayLayer = new Container();
   depthLayer.sortableChildren = true;
   const player = createPlayerSprite();
   const adventurerViews = new Map<
@@ -90,6 +92,7 @@ export function createGameRuntime({
     string,
     { sprite: ReturnType<typeof createGoblinSprite>; time: number; state: string }
   >();
+  const battleViews = new Map<BattleId, WorldBattleView>();
   let camera = { x: 0, y: 0 };
   let canvas: HTMLCanvasElement;
   let locationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -240,7 +243,7 @@ export function createGameRuntime({
         depthLayer.addChild(sprite.view);
         goblinViews.set(snapshot.id, { sprite, time: 0, state: '' });
       }
-      world.addChild(groundLayer, marker, battleLabels, depthLayer);
+      world.addChild(groundLayer, marker, depthLayer, battleOverlayLayer);
       const updateCamera = () => {
         camera = cameraForPlayer(
           movement.position,
@@ -261,6 +264,7 @@ export function createGameRuntime({
         syncChunks();
       };
       let animationTime = 0;
+      let battleAnimationTime = 0;
       let lastAnimation: `${PlayerAnimation}:${string}` = 'idle:south';
       const draw = (deltaSeconds = 0) => {
         const suspendedAdventurers = new Set(controller.adventurers.snapshots().filter((npc) => controller.battles.membership(npc.id)?.stage === 'participating').map((npc) => npc.id));
@@ -275,6 +279,7 @@ export function createGameRuntime({
         const frameIndex = Math.floor(animationTime * (walking ? 10 : 2)) % (walking ? 4 : 2);
         player.setFrame(animation, movement.facing, frameIndex);
         positionWorldCharacter(player.view, movement.position);
+        player.view.visible = controller.battles.membership('player')?.stage !== 'participating';
         const adventurerSnapshots = controller.adventurers.snapshots();
         const liveAdventurerIds = new Set(adventurerSnapshots.map((npc) => npc.id));
         for (const [id, resource] of adventurerViews)
@@ -316,26 +321,44 @@ export function createGameRuntime({
           resource.sprite.setFrame(animation, npc.facing, frameIndex);
           positionWorldCharacter(resource.sprite.view, npc.position);
         }
-        marker.clear();
-        battleLabels.removeChildren().forEach((label) => label.destroy());
-        // World battles are simulation-owned.  This renderer only projects
-        // their lightweight summaries, so offscreen fights need no Pixi state.
-        for (const battle of controller.getSnapshot().battles) {
-          const x = battle.tile.col * TILE_SIZE + 24;
-          const y = battle.tile.row * TILE_SIZE + 24;
-          marker.moveTo(x - 9, y - 9).lineTo(x + 9, y + 9).stroke({ color: '#f6d365', width: 3 });
-          marker.moveTo(x + 9, y - 9).lineTo(x - 9, y + 9).stroke({ color: '#f6d365', width: 3 });
-          marker.circle(x, y, 13).stroke({ color: '#612d2d', width: 2, alpha: .9 });
-          const label = new Text({ text: `${battle.adventurers}/${battle.goblins}`, style: { fill: '#fff3b0', fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', stroke: { color: '#241510', width: 2 } } });
-          label.anchor.set(.5, .5); label.position.set(x, y + 18); label.zIndex = y + 20; battleLabels.addChild(label);
+        // Use the current camera for battle culling rather than retaining
+        // offscreen Pixi objects for every simulated background encounter.
+        follow();
+        battleAnimationTime += Math.min(deltaSeconds, .1);
+        const battles = controller.getSnapshot().battles;
+        const viewport = {
+          left: -camera.x,
+          top: -camera.y,
+          right: -camera.x + host.clientWidth,
+          bottom: -camera.y + host.clientHeight
+        };
+        const visibleBattles = battles.filter((battle) => {
+          const x = (battle.tile.col + .5) * TILE_SIZE;
+          const footY = (battle.tile.row + .75) * TILE_SIZE;
+          return x + 52 >= viewport.left && x - 52 <= viewport.right && footY + 26 >= viewport.top && footY - 80 <= viewport.bottom;
+        });
+        const liveBattleIds = new Set(visibleBattles.map((battle) => battle.id));
+        for (const [id, view] of battleViews)
+          if (!liveBattleIds.has(id)) { view.destroy(); battleViews.delete(id); }
+        // Battle projection is renderer-owned and directly world-anchored.
+        // It intentionally never shares the destination marker's transform.
+        for (const battle of visibleBattles) {
+          let view = battleViews.get(battle.id);
+          if (!view) {
+            view = createWorldBattleView(battle);
+            depthLayer.addChild(view.fighters);
+            battleOverlayLayer.addChild(view.overlay);
+            battleViews.set(battle.id, view);
+          }
+          view.update(battle, battleAnimationTime);
         }
+        marker.clear();
         if (movement.destination)
           marker.circle(0, 0, 8).stroke({ color: '#fff3b0', width: 2, alpha: 0.9 });
         marker.position.set(
           (movement.destination?.col ?? 0) * TILE_SIZE + 24,
           (movement.destination?.row ?? 0) * TILE_SIZE + 24
         );
-        follow();
       };
       const updateLocation = () => {
         const location = locationAt(map, movement.tile);
@@ -417,6 +440,8 @@ export function createGameRuntime({
         canvas.removeEventListener('webglcontextlost', contextLost);
         if (locationTimer) clearTimeout(locationTimer);
         chunkResources.destroyAll();
+        for (const view of battleViews.values()) view.destroy();
+        battleViews.clear();
         for (const resource of [...adventurerViews.values(), ...goblinViews.values()])
           resource.sprite.view.destroy({ children: true });
         adventurerViews.clear();
