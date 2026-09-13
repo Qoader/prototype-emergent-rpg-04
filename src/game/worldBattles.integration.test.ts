@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGameController } from './gameController';
+import { createGameController, ENEMY_ACTION_DELAY_SECONDS } from './gameController';
 import { createBattle } from './battle/engine';
 import { createCombatant } from './battle/rules';
 import type { WorldMap } from './types';
@@ -36,6 +36,24 @@ describe('world battle integration', () => {
     expect(controller.getSnapshot().battles.map((battle) => battle.id)).toEqual([first.id, second.id]);
     expect(controller.battles.at({ col: 2, row: 1 })?.id).toBe(first.id);
     expect(controller.battles.at({ col: 4, row: 1 })?.id).toBe(second.id);
+  });
+
+  it('resolves background AI movement logically without publishing selected-battle playback', () => {
+    const controller = createGameController(map);
+    const background = controller.battles.create(
+      { col: 4, row: 1 },
+      npcBattle('adventurer-background', 'goblin-background')
+    );
+    const before = { ...background.battle.combatants['adventurer-background']!.position };
+
+    controller.tick(ENEMY_ACTION_DELAY_SECONDS);
+
+    expect(background.battle.combatants['adventurer-background']!.position).not.toEqual(before);
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.mode).toBe('exploration');
+    expect(snapshot.battle).toBeNull();
+    expect(snapshot.battleBusy).toBe(false);
+    expect(snapshot.selectedBattleId).toBeNull();
   });
 
   it('queues a solo actor that naturally reaches an existing battle tile', () => {
