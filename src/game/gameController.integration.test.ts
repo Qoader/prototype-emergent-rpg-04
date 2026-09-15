@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMap } from './map';
 import { createGameController } from './gameController';
 import type { WorldMap } from './types';
@@ -96,6 +96,83 @@ describe('game controller integration', () => {
     controller.tick(1 / 3);
     expect(controller.movement.tile).toEqual({ col: 3, row: 1 });
     expect(controller.movement.destination).toBeNull();
+  });
+
+  it('searches stationary ground with an injected random source and locks exploration until closed', () => {
+    const controller = createGameController(openMap(), undefined, { random: () => 0 });
+    controller.openInventory();
+    controller.dropItem('ration', 1);
+    controller.closeInventory();
+    controller.pointerDown({
+      clientX: 58,
+      clientY: 58,
+      pointerType: 'mouse',
+      button: 0,
+      rect: { left: 0, top: 0 },
+      camera: { x: 0, y: 0 }
+    });
+    expect(controller.getSnapshot().interaction.kind).toBe('menu');
+    expect(controller.startSearch()).toBe(true);
+    expect(controller.requestDestination({ col: 2, row: 1 })).toBeNull();
+    expect(controller.openInventory()).toBe(false);
+    controller.tick(5);
+    expect(controller.getSnapshot().interaction).toMatchObject({
+      kind: 'results',
+      found: [{ id: 'ration', quantity: 1 }]
+    });
+    expect(controller.takeFoundItem('ration', 1)).toMatchObject({ ok: true });
+    expect(controller.groundAt({ col: 1, row: 1 })).toEqual([]);
+    expect(controller.getSnapshot().interaction).toMatchObject({
+      kind: 'results',
+      found: [],
+      foundAny: true
+    });
+    expect(controller.closeInteraction()).toBe(true);
+  });
+
+  it('dismisses tile actions and starts navigation when another tile is clicked', () => {
+    const controller = createGameController(openMap());
+    controller.pointerDown({
+      clientX: 58,
+      clientY: 58,
+      pointerType: 'mouse',
+      button: 0,
+      rect: { left: 0, top: 0 },
+      camera: { x: 0, y: 0 }
+    });
+    expect(controller.getSnapshot().interaction.kind).toBe('menu');
+    expect(
+      controller.pointerDown({
+        clientX: 2 * 48 + 10,
+        clientY: 1 * 48 + 10,
+        pointerType: 'mouse',
+        button: 0,
+        rect: { left: 0, top: 0 },
+        camera: { x: 0, y: 0 }
+      })
+    ).toEqual({ col: 2, row: 1 });
+    expect(controller.getSnapshot().interaction.kind).toBe('none');
+    expect(controller.movement.route).toEqual([{ col: 2, row: 1 }]);
+  });
+
+  it('lets a same-step encounter interrupt search before discovery rolls', () => {
+    const random = vi.fn(() => 0);
+    const controller = createGameController(createBattleFixture(false, true), undefined, {
+      random
+    });
+    controller.pointerDown({
+      clientX: 58,
+      clientY: 58,
+      pointerType: 'mouse',
+      button: 0,
+      rect: { left: 0, top: 0 },
+      camera: { x: 0, y: 0 }
+    });
+    controller.startSearch();
+    controller.tick(5);
+    expect(controller.mode).toBe('battle');
+    expect(controller.getSnapshot().interaction).toEqual({ kind: 'none' });
+    expect(random).not.toHaveBeenCalled();
   });
 
   it('accounts for camera translation and ignores secondary mouse input', () => {

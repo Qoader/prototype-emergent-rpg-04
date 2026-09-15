@@ -10,6 +10,7 @@
   import { tileAt } from '../game/map';
   import GameMenu from './GameMenu.svelte';
   import InventoryDialog from './InventoryDialog.svelte';
+  import SearchDialog from './SearchDialog.svelte';
 
   let host: HTMLElement;
   let status = '';
@@ -19,16 +20,17 @@
   const soloFixture = window.location.search.includes('battle-fixture-solo');
   const defeatFixture = window.location.search.includes('battle-fixture-defeat');
   const inventoryFixture = window.location.search.includes('inventory-fixture');
+  const searchFixture = window.location.search.includes('search-fixture');
   const map = reinforcementFixture
     ? createReinforcementBattleFixture()
-    : inventoryFixture
+    : inventoryFixture || searchFixture
       ? createBattleFixture(false, false)
       : window.location.search.includes('battle-fixture')
         ? createBattleFixture(!soloFixture && !defeatFixture, !defeatFixture)
-      : createWorld(stabilityFixture ? 7331 : undefined);
+        : createWorld(stabilityFixture ? 7331 : undefined);
   // Browser inventory fixture deliberately has no roaming actors: it proves
   // exploration UI without an encounter race before the first interaction.
-  if (inventoryFixture) map.goblinNests = [];
+  if (inventoryFixture || searchFixture) map.goblinNests = [];
   if (stabilityFixture && map.goblinNests?.[0]) {
     const nest = map.goblinNests[0];
     const spawn = { ...map.spawn };
@@ -46,7 +48,10 @@
     ];
   }
   const tileStore = createTileStore(map);
-  const controller = createGameController(map, tileStore);
+  const controller = createGameController(map, tileStore, searchFixture ? { random: () => 0 } : {});
+  if (searchFixture)
+    (window as typeof globalThis & { __advanceSearchFixture?: () => void }).__advanceSearchFixture =
+      () => controller.tick(5);
   if (reinforcementFixture) {
     const target = (tile: { col: number; row: number }) => [
       { id: 'adventurer-target', kind: 'adventurer' as const, tile }
@@ -91,6 +96,11 @@
   let snapshot = controller.getSnapshot();
   $: mode = snapshot.mode;
   let inventoryOpen = false;
+  let playerScreen = { x: 0, y: 0, width: 0, height: 0 };
+  $: menuPosition = {
+    left: Math.max(8, Math.min(playerScreen.x + 16, playerScreen.width - 176)),
+    top: Math.max(8, Math.min(playerScreen.y - 72, playerScreen.height - 96))
+  };
   const openInventory = () => {
     if (controller.openInventory()) inventoryOpen = true;
   };
@@ -112,6 +122,9 @@
       onLocation: (label) => {
         placeName = label;
       },
+      onPlayerScreenPosition: (position) => {
+        playerScreen = position;
+      },
       onError: (failure: RuntimeFailure) => {
         void failure;
         status = 'Unable to load the map renderer. Please reload the page.';
@@ -126,11 +139,21 @@
             __startBattleStabilityEncounter?: (index: number) => void;
           }
         ).__startBattleStabilityEncounter;
+      if (searchFixture)
+        delete (window as typeof globalThis & { __advanceSearchFixture?: () => void })
+          .__advanceSearchFixture;
     };
   });
 </script>
 
 <section class="game" bind:this={host} aria-label="Emergent RPG map">
+  <i
+    class="player-screen-anchor"
+    data-testid="player-screen-anchor"
+    aria-hidden="true"
+    style:left={`${playerScreen.x}px`}
+    style:top={`${playerScreen.y}px`}
+  ></i>
   {#if mode === 'exploration'}<GameMenu onInventory={openInventory} />{/if}
   <InventoryDialog
     open={inventoryOpen && mode === 'exploration'}
@@ -138,6 +161,13 @@
     dropsEnabled={inventoryOpen && !controller.movement.route.length}
     onClose={closeInventory}
     onDrop={(id, quantity) => controller.dropItem(id, quantity)}
+  />
+  <SearchDialog
+    interaction={snapshot.interaction}
+    {menuPosition}
+    onSearch={controller.startSearch}
+    onClose={controller.closeInteraction}
+    onTake={controller.takeFoundItem}
   />
   {#if mode !== 'exploration'}<BattleScreen
       battle={snapshot.battle}

@@ -31,6 +31,39 @@ test('opens inventory from the menu and validates a drop quantity', async ({ pag
   await expect(page.getByRole('dialog', { name: 'Inventory' })).not.toBeVisible();
 });
 
+test('search fixture drops, discovers, and picks up a deterministic ground item', async ({
+  page
+}) => {
+  await page.goto('/?search-fixture');
+  const canvas = page.getByTestId('game-canvas');
+  await expect(canvas).toBeVisible();
+  await page.getByRole('button', { name: 'Game menu' }).click();
+  await page.getByRole('button', { name: 'Inventory' }).click();
+  await page.getByRole('button', { name: 'Ration, quantity 4' }).click();
+  await page.getByLabel('Drop quantity').fill('1');
+  await page.getByRole('button', { name: 'Drop' }).click();
+  await page.getByRole('button', { name: 'Close inventory' }).click();
+  const box = await canvas.boundingBox();
+  const player = await page.getByTestId('player-screen-anchor').boundingBox();
+  if (!box || !player) throw new Error('missing map or player bounds');
+  await canvas.click({ position: { x: player.x - box.x, y: player.y - box.y } });
+  await expect(page.getByTestId('tile-actions-menu')).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Search' }).click();
+  // The fixture advances exactly five active simulation seconds; production
+  // search remains wall-clock/ticker driven and random.
+  await page.evaluate(() =>
+    (window as typeof window & { __advanceSearchFixture: () => void }).__advanceSearchFixture()
+  );
+  const results = page.getByRole('dialog', { name: 'Tile actions' });
+  await expect(results).toContainText('Ration × 1');
+  await results.getByRole('button', { name: 'Take all' }).click();
+  await expect(results).toContainText('No discovered items remaining.');
+  await results.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Game menu' }).click();
+  await page.getByRole('button', { name: 'Inventory' }).click();
+  await expect(page.getByRole('button', { name: 'Ration, quantity 4' })).toBeVisible();
+});
+
 test.describe('deterministic tactical battle fixture', () => {
   test('keeps the rendered battlefield visible beneath ready interaction overlays', async ({
     page

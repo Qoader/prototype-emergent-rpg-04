@@ -28,6 +28,13 @@ main {
   height: 100%;
   touch-action: none;
 }
+.player-screen-anchor {
+  position: absolute;
+  z-index: -1;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
 .status {
   position: absolute;
   z-index: 2;
@@ -109,6 +116,74 @@ main {
 }
 .inventory-dialog::backdrop {
   background: #07120dcc;
+}
+.search-dialog {
+  width: min(92vw, 30rem);
+  padding: 1rem;
+  color: #f6e6bc;
+  background: #112c25;
+  border: 1px solid #d9bb78;
+  border-radius: 0.5rem;
+  box-shadow: 0 1rem 4rem #000;
+}
+.search-dialog::backdrop {
+  background: #07120dcc;
+}
+.tile-actions-menu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  gap: 0.4rem;
+  max-width: calc(100% - 1rem);
+  padding: 0.4rem;
+  background: #112c25;
+  border: 1px solid #d9bb78;
+  border-radius: 0.4rem;
+  box-shadow: 0 0.5rem 1.5rem #0009;
+}
+.tile-actions-menu button {
+  cursor: pointer;
+  color: #f6e6bc;
+  background: #264b3c;
+  border: 1px solid #cba85f;
+  border-radius: 0.25rem;
+  padding: 0.45rem 0.65rem;
+}
+.search-dialog section,
+.search-dialog header,
+.search-dialog footer,
+.found-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.search-dialog section {
+  flex-wrap: wrap;
+}
+.search-dialog h2 {
+  width: 100%;
+  margin: 0 0 0.5rem;
+  font-family: Georgia, serif;
+}
+.search-dialog header h2 {
+  flex: 1;
+}
+.found-item {
+  width: 100%;
+  justify-content: flex-end;
+  padding: 0.4rem 0;
+  border-top: 1px solid #b8985b88;
+}
+.found-item span {
+  margin-right: auto;
+}
+.search-dialog button {
+  cursor: pointer;
+  color: #f6e6bc;
+  background: #264b3c;
+  border: 1px solid #cba85f;
+  border-radius: 0.25rem;
+  padding: 0.45rem 0.65rem;
 }
 .inventory-panel {
   padding: 1rem;

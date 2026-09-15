@@ -34,6 +34,14 @@ import { advanceRouteField, createRouteField, routeKey, type RouteField } from '
 import { createInventoryService } from './inventory/store';
 import { deterministicLoot } from './inventory/loot';
 import type { ItemId, InventorySnapshot } from './inventory/types';
+import {
+  advanceSearch,
+  noInteraction,
+  openTileActions,
+  startSearch,
+  type InteractionState,
+  type RandomSource
+} from './interactions';
 
 export type GameMode = 'exploration' | 'battle' | 'result';
 export type Encounter = { goblinId: string; tile: Point };
@@ -58,12 +66,18 @@ export type GameSnapshot = {
   selectedBattleId: BattleId | null;
   playerEntry: 'waiting' | 'admitted' | null;
   inventory: InventorySnapshot;
+  interaction: InteractionState;
 };
 export const ENEMY_ACTION_DELAY_SECONDS = 0.9;
 const STEP = 1 / 60;
 const tileEqual = (a: Point, b: Point) => a.col === b.col && a.row === b.row;
 
-export function createGameController(map: WorldMap, tiles?: TileReader) {
+export function createGameController(
+  map: WorldMap,
+  tiles?: TileReader,
+  options: { random?: RandomSource } = {}
+) {
+  const random = options.random ?? Math.random;
   const movement = createMovement(map.spawn);
   const reader = tiles ?? {
     width: map.width,
@@ -97,6 +111,10 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     ]);
   let inventoryPause = false;
   let inventorySessionOpen = false;
+  let interaction: InteractionState = noInteraction();
+  const closeInteraction = () => {
+    interaction = noInteraction();
+  };
   const closeInventorySession = () => {
     inventoryPause = false;
     inventorySessionOpen = false;
@@ -184,7 +202,8 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       battles: registry.summaries(),
       selectedBattleId: active?.id ?? null,
       playerEntry,
-      inventory: playerInventory.snapshot()
+      inventory: playerInventory.snapshot(),
+      interaction: structuredClone(interaction)
     };
   };
   const notify = () => {
@@ -219,6 +238,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     const value = registry.create(tile, createBattle(goblinId, sceneAt(tile)));
     goblins.holdForBattle(goblinId);
     closeInventorySession();
+    closeInteraction();
     session = { kind: 'battle', battleId: value.id };
     battleNotice = initialBattleNotice();
     advanceFields();
@@ -250,6 +270,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       arrivalStep: worldStep
     });
     closeInventorySession();
+    closeInteraction();
     session = { kind: 'battle', battleId: value.id };
     battleNotice = {
       message: 'Joining the battle at the next turn boundary.',
@@ -614,7 +635,11 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
         });
     }
   };
-  const advanceWorld = (seconds: number, selectedId?: BattleId) => {
+  const advanceWorld = (
+    seconds: number,
+    selectedId?: BattleId,
+    afterContacts?: (dt: number) => void
+  ) => {
     const steps = Math.round(seconds / STEP);
     for (let index = 0; index < steps && session.kind !== 'result'; index += 1) {
       const dt = STEP;
@@ -628,23 +653,40 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       goblins.step(dt, npcTargets());
       for (const value of registry.all()) collectResponses(value);
       resolveContacts();
+      afterContacts?.(dt);
       advanceFields();
       assignResponders();
       advanceBackground(dt, selectedId);
     }
   };
   const requestDestination = (requested: Point) => {
-    if (session.kind !== 'exploration' || inventoryPause) return null;
+    if (session.kind !== 'exploration' || inventoryPause || interaction.kind !== 'none')
+      return null;
     const plan = planNavigation(reader, movement.tile, requested);
     if (!plan) return null;
     movement.route = plan.route;
     movement.destination = plan.destination;
     return plan.destination;
   };
-  const pointerDown = (input: PointerInput) =>
-    acceptsPointer(input.pointerType, input.button)
-      ? requestDestination(tilePointFromPointer(input))
-      : null;
+  const pointerDown = (input: PointerInput) => {
+    if (!acceptsPointer(input.pointerType, input.button)) return null;
+    const requested = tilePointFromPointer(input);
+    if (interaction.kind === 'menu' && !tileEqual(requested, movement.tile)) {
+      closeInteraction();
+      return requestDestination(requested);
+    }
+    if (
+      session.kind === 'exploration' &&
+      interaction.kind === 'none' &&
+      !movement.route.length &&
+      tileEqual(requested, movement.tile)
+    ) {
+      interaction = openTileActions(requested, Boolean(reader.getTile(requested)?.walkable));
+      notify();
+      return requested;
+    }
+    return requestDestination(requested);
+  };
   const apply = (command: BattleCommand) => {
     const value = selected();
     if (!value || battlePlayback) return false;
@@ -692,6 +734,19 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       resolveContacts();
       return;
     }
+    if (interaction.kind === 'searching') {
+      advanceWorld(elapsed, undefined, (dt) => {
+        if (interaction.kind === 'searching')
+          interaction = advanceSearch(
+            interaction,
+            dt,
+            inventoryService.groundAt(interaction.tile),
+            random
+          );
+      });
+      notify();
+      return;
+    }
     if (inventoryPause && movement.route.length) {
       // Inventory never strands the player between tiles: finish precisely the
       // current edge, then discard the remaining route before world contacts.
@@ -734,7 +789,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     getSnapshot: snapshot,
     inventory: () => playerInventory.snapshot(),
     openInventory: () => {
-      if (session.kind !== 'exploration') return false;
+      if (session.kind !== 'exploration' || interaction.kind !== 'none') return false;
       inventoryPause = true;
       inventorySessionOpen = true;
       if (!movement.route.length) movement.destination = null;
@@ -748,6 +803,45 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
         return { ok: false as const, error: 'unavailable' as const };
       const result = inventoryService.drop('player', movement.tile, id, quantity);
       if (result.ok) notify();
+      return result;
+    },
+    startSearch: () => {
+      if (
+        session.kind !== 'exploration' ||
+        inventorySessionOpen ||
+        interaction.kind === 'searching'
+      )
+        return false;
+      interaction = startSearch(interaction);
+      if (interaction.kind !== 'searching') return false;
+      movement.route = [];
+      movement.destination = null;
+      notify();
+      return true;
+    },
+    closeInteraction: () => {
+      if (interaction.kind === 'searching') return false;
+      closeInteraction();
+      notify();
+      return true;
+    },
+    takeFoundItem: (id: ItemId, quantity: number) => {
+      if (session.kind !== 'exploration' || interaction.kind !== 'results')
+        return { ok: false as const, error: 'unavailable' as const };
+      const found = interaction.found.find((stack) => stack.id === id)?.quantity ?? 0;
+      if (quantity > found) return { ok: false as const, error: 'missing-item' as const };
+      const result = inventoryService.takeGround('player', interaction.tile, id, quantity);
+      if (result.ok) {
+        interaction = {
+          ...interaction,
+          found: interaction.found
+            .map((stack) =>
+              stack.id === id ? { ...stack, quantity: stack.quantity - quantity } : stack
+            )
+            .filter((stack) => stack.quantity > 0)
+        };
+        notify();
+      }
       return result;
     },
     groundAt: inventoryService.groundAt,

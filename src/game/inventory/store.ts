@@ -67,11 +67,34 @@ export function createInventoryService() {
     ground.set(key, mergeStack(ground.get(key) ?? [], id, quantity));
     return result;
   };
+  /** Adds first, then removes ground only on success: pickup is atomic. */
+  const takeGround = (
+    actorId: string,
+    point: Point,
+    id: ItemId,
+    quantity: number
+  ): InventoryResult => {
+    const target = inventories.get(actorId);
+    const key = tileKey(point);
+    const available = ground.get(key) ?? [];
+    if (!target) return { ok: false, error: 'unavailable' };
+    if (!validQuantity(quantity)) return { ok: false, error: 'invalid-quantity' };
+    if ((available.find((stack) => stack.id === id)?.quantity ?? 0) < quantity)
+      return { ok: false, error: 'missing-item' };
+    const added = target.add(id, quantity);
+    if (!added.ok) return added;
+    const next = removeStack(available, id, quantity);
+    // The prior check makes this unreachable, preserving both sides if data is malformed.
+    if (!next) return { ok: false, error: 'missing-item' };
+    ground.set(key, next);
+    return added;
+  };
   return {
     register,
     unregister: (id: string) => inventories.delete(id),
     inventory: (id: string) => inventories.get(id),
     groundAt: (point: Point) => (ground.get(tileKey(point)) ?? []).map((s) => ({ ...s })),
-    drop
+    drop,
+    takeGround
   };
 }
