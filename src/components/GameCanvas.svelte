@@ -8,6 +8,8 @@
   import BattleScreen from './BattleScreen.svelte';
   import { createBattleFixture, createReinforcementBattleFixture } from '../game/e2eBattleFixture';
   import { tileAt } from '../game/map';
+  import GameMenu from './GameMenu.svelte';
+  import InventoryDialog from './InventoryDialog.svelte';
 
   let host: HTMLElement;
   let status = '';
@@ -16,14 +18,17 @@
   const reinforcementFixture = window.location.search.includes('battle-fixture-reinforcement');
   const soloFixture = window.location.search.includes('battle-fixture-solo');
   const defeatFixture = window.location.search.includes('battle-fixture-defeat');
+  const inventoryFixture = window.location.search.includes('inventory-fixture');
   const map = reinforcementFixture
     ? createReinforcementBattleFixture()
-    : window.location.search.includes('battle-fixture')
-    ? createBattleFixture(
-        !soloFixture && !defeatFixture,
-        !defeatFixture
-      )
-    : createWorld(stabilityFixture ? 7331 : undefined);
+    : inventoryFixture
+      ? createBattleFixture(false, false)
+      : window.location.search.includes('battle-fixture')
+        ? createBattleFixture(!soloFixture && !defeatFixture, !defeatFixture)
+      : createWorld(stabilityFixture ? 7331 : undefined);
+  // Browser inventory fixture deliberately has no roaming actors: it proves
+  // exploration UI without an encounter race before the first interaction.
+  if (inventoryFixture) map.goblinNests = [];
   if (stabilityFixture && map.goblinNests?.[0]) {
     const nest = map.goblinNests[0];
     const spawn = { ...map.spawn };
@@ -47,9 +52,12 @@
       { id: 'adventurer-target', kind: 'adventurer' as const, tile }
     ];
     controller.goblins.tick(0.2, target({ col: 13, row: 3 }));
-    for (let index = 0; index < 12; index += 1) controller.goblins.tick(0.1, target({ col: 13, row: 3 }));
-    for (let index = 0; index < 12; index += 1) controller.goblins.tick(0.1, target({ col: 10, row: 3 }));
-    for (let index = 0; index < 12; index += 1) controller.goblins.tick(0.1, target({ col: 13, row: 3 }));
+    for (let index = 0; index < 12; index += 1)
+      controller.goblins.tick(0.1, target({ col: 13, row: 3 }));
+    for (let index = 0; index < 12; index += 1)
+      controller.goblins.tick(0.1, target({ col: 10, row: 3 }));
+    for (let index = 0; index < 12; index += 1)
+      controller.goblins.tick(0.1, target({ col: 13, row: 3 }));
     controller.startBattleForTest('goblin-reinforcement-battle-0');
     const primary = controller.battle?.combatants['goblin-reinforcement-battle-0'];
     if (primary) primary.position = { col: 5, row: 4 };
@@ -82,6 +90,15 @@
     controller.startBattleForTest('goblin-fixture-nest-0');
   let snapshot = controller.getSnapshot();
   $: mode = snapshot.mode;
+  let inventoryOpen = false;
+  const openInventory = () => {
+    if (controller.openInventory()) inventoryOpen = true;
+  };
+  const closeInventory = () => {
+    inventoryOpen = false;
+    controller.closeInventory();
+  };
+  $: if (mode !== 'exploration' && inventoryOpen) closeInventory();
 
   onMount(() => {
     const unsubscribe = controller.subscribe((next) => {
@@ -114,6 +131,14 @@
 </script>
 
 <section class="game" bind:this={host} aria-label="Emergent RPG map">
+  {#if mode === 'exploration'}<GameMenu onInventory={openInventory} />{/if}
+  <InventoryDialog
+    open={inventoryOpen && mode === 'exploration'}
+    inventory={snapshot.inventory}
+    dropsEnabled={inventoryOpen && !controller.movement.route.length}
+    onClose={closeInventory}
+    onDrop={(id, quantity) => controller.dropItem(id, quantity)}
+  />
   {#if mode !== 'exploration'}<BattleScreen
       battle={snapshot.battle}
       battleBusy={snapshot.battleBusy}

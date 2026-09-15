@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('loads and accepts a destination input', async ({ page }, testInfo) => {
-  await page.goto('/');
+  await page.goto('/?inventory-fixture');
   await expect(page.getByTestId('game-canvas')).toBeVisible();
   await expect(page.getByTestId('player-status')).toHaveCount(0);
   const canvas = page.getByTestId('game-canvas');
@@ -11,6 +11,24 @@ test('loads and accepts a destination input', async ({ page }, testInfo) => {
     await canvas.click({ position: { x: 250, y: 400 } });
   }
   await expect(page.getByTestId('player-status')).toHaveCount(0);
+});
+
+test('opens inventory from the menu and validates a drop quantity', async ({ page }) => {
+  await page.goto('/?inventory-fixture');
+  await page.getByRole('button', { name: 'Game menu' }).click();
+  await page.getByRole('button', { name: 'Inventory' }).click();
+  await expect(page.getByRole('dialog', { name: 'Inventory' })).toBeVisible();
+  await page.getByRole('button', { name: 'Ration, quantity 4' }).click();
+  const quantity = page.getByLabel('Drop quantity');
+  await quantity.fill('99');
+  await page.getByRole('button', { name: 'Drop' }).click();
+  await expect(page.getByRole('alert')).toContainText('whole quantity');
+  await quantity.fill('1');
+  await page.getByRole('button', { name: 'Drop' }).click();
+  await expect(page.getByRole('button', { name: 'Ration, quantity 3' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Inventory' })).toContainText('3.8 kg / 30 kg');
+  await page.getByRole('button', { name: 'Close inventory' }).click();
+  await expect(page.getByRole('dialog', { name: 'Inventory' })).not.toBeVisible();
 });
 
 test.describe('deterministic tactical battle fixture', () => {
@@ -77,7 +95,9 @@ test.describe('deterministic tactical battle fixture', () => {
     expect(Number.isInteger(metrics.transform.y)).toBe(true);
   });
 
-  test('centers the padded surface on combatants and reveals an edge focus target', async ({ page }) => {
+  test('centers the padded surface on combatants and reveals an edge focus target', async ({
+    page
+  }) => {
     await page.setViewportSize({ width: 320, height: 568 });
     await page.goto('/?battle-fixture-solo');
     const board = page.locator('.battle-board');
@@ -105,8 +125,10 @@ test.describe('deterministic tactical battle fixture', () => {
         visible,
         // Cell (0, 0) plus its 8px drawing allowance is [0, 64] on each axis.
         targetVisible:
-          visible.left <= 0 && visible.left + viewport.clientWidth >= 64 &&
-          visible.top <= 0 && visible.top + viewport.clientHeight >= 64
+          visible.left <= 0 &&
+          visible.left + viewport.clientWidth >= 64 &&
+          visible.top <= 0 &&
+          visible.top + viewport.clientHeight >= 64
       };
     });
     expect(Number.isInteger(edge.camera.x)).toBe(true);
@@ -119,7 +141,9 @@ test.describe('deterministic tactical battle fixture', () => {
       const transform = new DOMMatrixReadOnly(
         getComputedStyle(element.querySelector('.board-content')!).transform
       );
-      const positions = [...element.querySelectorAll('.grid button.player, .grid button.goblin')].map((button) => {
+      const positions = [
+        ...element.querySelectorAll('.grid button.player, .grid button.goblin')
+      ].map((button) => {
         const [col, row] = (button.getAttribute('aria-label') ?? '').split(', ');
         return { col: Number(col), row: Number(row) };
       });
@@ -134,8 +158,16 @@ test.describe('deterministic tactical battle fixture', () => {
       return {
         camera: { x: transform.m41, y: transform.m42 },
         expected: {
-          x: clamp(viewport.clientWidth / 2 - (8 + ((left + right) / 2) * 48), viewport.clientWidth, 496),
-          y: clamp(viewport.clientHeight / 2 - (8 + ((top + bottom) / 2) * 48), viewport.clientHeight, 496)
+          x: clamp(
+            viewport.clientWidth / 2 - (8 + ((left + right) / 2) * 48),
+            viewport.clientWidth,
+            496
+          ),
+          y: clamp(
+            viewport.clientHeight / 2 - (8 + ((top + bottom) / 2) * 48),
+            viewport.clientHeight,
+            496
+          )
         }
       };
     });
@@ -156,19 +188,46 @@ test.describe('deterministic tactical battle fixture', () => {
     await page.keyboard.press('Enter');
     await expect(page.getByText(/MP 2/)).toBeVisible();
   });
-  test('derives all legal target cells, clears them while inactive, and exposes keyboard focus only', async ({ page }) => {
+  test('derives all legal target cells, clears them while inactive, and exposes keyboard focus only', async ({
+    page
+  }) => {
     await page.goto('/?battle-fixture-solo');
     const board = page.locator('.battle-board');
     await expect(board).toHaveClass(/ready/, { timeout: 8000 });
     // Player begins at 2,4 with 3 MP. These are every in-bounds, unoccupied
     // Manhattan destination at distance 1..3; the goblin at 6,4 is not reachable.
-    const movementLabels = await page.locator('[role="gridcell"].reachable').evaluateAll((cells) =>
-      cells.map((cell) => cell.getAttribute('aria-label')?.split(', ').slice(0, 2).join(','))
+    const movementLabels = await page
+      .locator('[role="gridcell"].reachable')
+      .evaluateAll((cells) =>
+        cells.map((cell) => cell.getAttribute('aria-label')?.split(', ').slice(0, 2).join(','))
+      );
+    expect(movementLabels.sort()).toEqual(
+      [
+        '0,3',
+        '0,4',
+        '0,5',
+        '1,2',
+        '1,3',
+        '1,4',
+        '1,5',
+        '1,6',
+        '2,1',
+        '2,2',
+        '2,3',
+        '2,5',
+        '2,6',
+        '2,7',
+        '3,2',
+        '3,3',
+        '3,4',
+        '3,5',
+        '3,6',
+        '4,3',
+        '4,4',
+        '4,5',
+        '5,4'
+      ].sort()
     );
-    expect(movementLabels.sort()).toEqual([
-      '0,3', '0,4', '0,5', '1,2', '1,3', '1,4', '1,5', '1,6', '2,1', '2,2', '2,3', '2,5', '2,6', '2,7',
-      '3,2', '3,3', '3,4', '3,5', '3,6', '4,3', '4,4', '4,5', '5,4'
-    ].sort());
     await expect(page.locator('[role="gridcell"].attackable')).toHaveCount(0);
 
     const player = page.getByRole('gridcell', { name: '2, 4, player' });
@@ -469,19 +528,25 @@ test.describe('deterministic tactical battle fixture', () => {
     await expect(battle.getByRole('list', { name: 'Turn order' })).toContainText('Adventurer');
     await expect(endTurn).toBeEnabled({ timeout: 10000 });
 
-    const movementLabel = await battle.locator('[role="gridcell"].reachable').evaluateAll((cells) => {
-      const points = (elements: Element[]) =>
-        elements.map((cell) => {
-          const [col, row] = cell.getAttribute('aria-label')!.split(', ').map(Number);
-          return { col: col!, row: row! };
-        });
-      const goblins = points([...document.querySelectorAll('.grid button.goblin')]);
-      return points(cells).find((cell) =>
-        goblins.some((goblin) => Math.abs(cell.col - goblin.col) + Math.abs(cell.row - goblin.row) === 1)
-      );
-    });
+    const movementLabel = await battle
+      .locator('[role="gridcell"].reachable')
+      .evaluateAll((cells) => {
+        const points = (elements: Element[]) =>
+          elements.map((cell) => {
+            const [col, row] = cell.getAttribute('aria-label')!.split(', ').map(Number);
+            return { col: col!, row: row! };
+          });
+        const goblins = points([...document.querySelectorAll('.grid button.goblin')]);
+        return points(cells).find((cell) =>
+          goblins.some(
+            (goblin) => Math.abs(cell.col - goblin.col) + Math.abs(cell.row - goblin.row) === 1
+          )
+        );
+      });
     expect(movementLabel).toBeDefined();
-    await battle.getByRole('gridcell', { name: `${movementLabel!.col}, ${movementLabel!.row}` }).click();
+    await battle
+      .getByRole('gridcell', { name: `${movementLabel!.col}, ${movementLabel!.row}` })
+      .click();
     await expect(battle.getByRole('grid')).toHaveAttribute('aria-busy', 'false', { timeout: 5000 });
     const attackable = battle.locator('[role="gridcell"].attackable').first();
     await expect(attackable).toBeVisible({ timeout: 5000 });

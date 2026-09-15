@@ -1,5 +1,5 @@
 import { planNavigation } from './pathfinding';
-import { advanceMovement, createMovement } from './movement';
+import { advanceMovement, createMovement, TILES_PER_SECOND } from './movement';
 import type { Point, TileReader, WorldMap } from './types';
 import { acceptsPointer, tilePointFromPointer } from './input';
 import { createAdventurerSimulation } from './adventurers';
@@ -31,6 +31,9 @@ import {
   type WorldBattle
 } from './worldBattles';
 import { advanceRouteField, createRouteField, routeKey, type RouteField } from './battleRoutes';
+import { createInventoryService } from './inventory/store';
+import { deterministicLoot } from './inventory/loot';
+import type { ItemId, InventorySnapshot } from './inventory/types';
 
 export type GameMode = 'exploration' | 'battle' | 'result';
 export type Encounter = { goblinId: string; tile: Point };
@@ -54,6 +57,7 @@ export type GameSnapshot = {
   battles: BattleSummary[];
   selectedBattleId: BattleId | null;
   playerEntry: 'waiting' | 'admitted' | null;
+  inventory: InventorySnapshot;
 };
 export const ENEMY_ACTION_DELAY_SECONDS = 0.9;
 const STEP = 1 / 60;
@@ -74,6 +78,29 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     settlements: map.settlements
   });
   const registry = createWorldBattleRegistry();
+  const inventoryService = createInventoryService();
+  const playerInventory = inventoryService.register('player', 30000, [
+    { id: 'ration', quantity: 4 },
+    { id: 'bandage', quantity: 3 },
+    { id: 'rope', quantity: 1 }
+  ]);
+  for (const actor of adventurers.snapshots())
+    inventoryService.register(actor.id, 25000, [
+      { id: 'ration', quantity: 3 },
+      { id: 'bandage', quantity: 2 },
+      { id: 'rope', quantity: 1 }
+    ]);
+  for (const actor of goblins.snapshots())
+    inventoryService.register(actor.id, 15000, [
+      { id: 'ration', quantity: 1 },
+      { id: 'stone', quantity: 3 }
+    ]);
+  let inventoryPause = false;
+  let inventorySessionOpen = false;
+  const closeInventorySession = () => {
+    inventoryPause = false;
+    inventorySessionOpen = false;
+  };
   const checkpoints = createCheckpointTracker(map.spawn, map.settlements ?? [], reader);
   const listeners = new Set<(snapshot: GameSnapshot) => void>();
   let session: SessionState = { kind: 'exploration' };
@@ -156,7 +183,8 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       battleNotice,
       battles: registry.summaries(),
       selectedBattleId: active?.id ?? null,
-      playerEntry
+      playerEntry,
+      inventory: playerInventory.snapshot()
     };
   };
   const notify = () => {
@@ -190,6 +218,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     relocate(tile);
     const value = registry.create(tile, createBattle(goblinId, sceneAt(tile)));
     goblins.holdForBattle(goblinId);
+    closeInventorySession();
     session = { kind: 'battle', battleId: value.id };
     battleNotice = initialBattleNotice();
     advanceFields();
@@ -220,6 +249,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       approachEdge: 'west',
       arrivalStep: worldStep
     });
+    closeInventorySession();
     session = { kind: 'battle', battleId: value.id };
     battleNotice = {
       message: 'Joining the battle at the next turn boundary.',
@@ -390,8 +420,10 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     ];
     for (const c of Object.values(value.battle.combatants))
       if (c.hp <= 0) {
+        if (c.kind !== 'player') dropDeathLoot(value, c.id);
         if (c.kind === 'goblin') goblins.remove(c.id);
         else if (c.kind === 'adventurer') adventurers.remove(c.id);
+        if (c.kind !== 'player') inventoryService.unregister(c.id);
       }
     registry.remove(value.id);
     routeFields.delete(value.id);
@@ -403,6 +435,21 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
         adventurers.releaseBattle(id);
         goblins.releaseBattle(id);
       }
+  };
+  const lootedDeaths = new Set<string>();
+  const dropDeathLoot = (value: WorldBattle, actorId: string) => {
+    const token = `${value.id}:${actorId}`;
+    if (lootedDeaths.has(token)) return;
+    lootedDeaths.add(token);
+    const inventory = inventoryService.inventory(actorId);
+    if (!inventory) return;
+    for (const stack of deterministicLoot(
+      map.seed ?? 0,
+      value.id,
+      actorId,
+      inventory.snapshot().stacks
+    ))
+      inventoryService.drop(actorId, value.tile, stack.id, stack.quantity);
   };
   const complete = (value: WorldBattle) => {
     if (!value.battle.outcome) return false;
@@ -480,6 +527,16 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
   ) => {
     if ('error' in transition) return false;
     value.battle = transition.state;
+    for (const event of transition.events)
+      if (event.kind === 'attack' && event.remainingHp === 0) {
+        const defeated = value.battle.combatants[event.targetId];
+        if (defeated?.kind !== 'player') {
+          dropDeathLoot(value, event.targetId);
+          inventoryService.unregister(event.targetId);
+          if (defeated?.kind === 'goblin') goblins.remove(event.targetId);
+          else if (defeated?.kind === 'adventurer') adventurers.remove(event.targetId);
+        }
+      }
     if (visible)
       battleNotice = reduceBattleNotice(battleNotice ?? initialBattleNotice(), transition.events);
     const move = transition.events.find(
@@ -577,7 +634,7 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     }
   };
   const requestDestination = (requested: Point) => {
-    if (session.kind !== 'exploration') return null;
+    if (session.kind !== 'exploration' || inventoryPause) return null;
     const plan = planNavigation(reader, movement.tile, requested);
     if (!plan) return null;
     movement.route = plan.route;
@@ -635,6 +692,13 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
       resolveContacts();
       return;
     }
+    if (inventoryPause && movement.route.length) {
+      // Inventory never strands the player between tiles: finish precisely the
+      // current edge, then discard the remaining route before world contacts.
+      advanceMovement(movement, 1 / TILES_PER_SECOND);
+      movement.route = [];
+      movement.destination = null;
+    }
     advanceWorld(elapsed);
     notify();
   };
@@ -667,7 +731,38 @@ export function createGameController(map: WorldMap, tiles?: TileReader) {
     dispatchBattle: apply,
     continueFromResult,
     subscribe,
-    getSnapshot: snapshot
+    getSnapshot: snapshot,
+    inventory: () => playerInventory.snapshot(),
+    openInventory: () => {
+      if (session.kind !== 'exploration') return false;
+      inventoryPause = true;
+      inventorySessionOpen = true;
+      if (!movement.route.length) movement.destination = null;
+      return true;
+    },
+    closeInventory: () => {
+      closeInventorySession();
+    },
+    dropItem: (id: ItemId, quantity: number) => {
+      if (session.kind !== 'exploration' || !inventorySessionOpen || movement.route.length)
+        return { ok: false as const, error: 'unavailable' as const };
+      const result = inventoryService.drop('player', movement.tile, id, quantity);
+      if (result.ok) notify();
+      return result;
+    },
+    groundAt: inventoryService.groundAt,
+    inventoryFor: (actorId: string) => inventoryService.inventory(actorId)?.snapshot() ?? null,
+    dropActorItem: (actorId: string, id: ItemId, quantity: number) => {
+      if (actorId === 'player' || registry.membership(actorId))
+        return { ok: false as const, error: 'unavailable' as const };
+      const actor = [...adventurers.snapshots(), ...goblins.snapshots()].find(
+        (value) => value.id === actorId
+      );
+      if (!actor) return { ok: false as const, error: 'unavailable' as const };
+      const result = inventoryService.drop(actorId, actor.tile, id, quantity);
+      if (result.ok) notify();
+      return result;
+    }
   };
 }
 export type GameController = ReturnType<typeof createGameController>;
