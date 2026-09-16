@@ -4,6 +4,8 @@ import { createGameController } from './gameController';
 import type { WorldMap } from './types';
 import { createBattleFixture } from './e2eBattleFixture';
 import { createTileStore } from './tileStore';
+import { createBattle } from './battle/engine';
+import { createCombatant } from './battle/rules';
 
 const openMap = (): WorldMap => ({
   width: 6,
@@ -27,8 +29,25 @@ describe('game controller integration', () => {
     expect(controller.movement.tile).toEqual({ col: 2, row: 1 });
     expect(controller.dropItem('ration', 1)).toMatchObject({ ok: true });
     expect(controller.groundAt({ col: 2, row: 1 })).toEqual([{ id: 'ration', quantity: 1 }]);
+    expect(controller.getSnapshot().searchCueTiles).toEqual([{ col: 2, row: 1 }]);
     controller.closeInventory();
     expect(controller.dropItem('ration', 1)).toMatchObject({ ok: false });
+  });
+  it('clears a cue only after a completed empty search', () => {
+    const controller = createGameController(openMap(), undefined, { random: () => 1 });
+    controller.openInventory();
+    controller.dropItem('ration', 1);
+    controller.closeInventory();
+    expect(controller.getSnapshot().searchCueTiles).toEqual([{ col: 1, row: 1 }]);
+    controller.pointerDown({ clientX: 58, clientY: 58, pointerType: 'mouse', button: 0, rect: { left: 0, top: 0 }, camera: { x: 0, y: 0 } });
+    controller.startSearch();
+    controller.tick(5);
+    expect(controller.getSnapshot().interaction).toMatchObject({ kind: 'results', foundAny: false });
+    expect(controller.getSnapshot().searchCueTiles).toEqual([]);
+    controller.closeInteraction();
+    controller.openInventory();
+    controller.dropItem('ration', 1);
+    expect(controller.getSnapshot().searchCueTiles).toEqual([{ col: 1, row: 1 }]);
   });
   it('allows manual NPC drops at the actor tile and rejects committed battle members', () => {
     const controller = createGameController(createBattleFixture(false, false));
@@ -38,6 +57,29 @@ describe('game controller integration', () => {
     expect(controller.groundAt(before.tile)).toEqual([{ id: 'ration', quantity: 1 }]);
     controller.startBattleForTest(id);
     expect(controller.dropActorItem(id, 'ration', 1)).toMatchObject({ ok: false });
+  });
+  it('marks only NPC drops witnessed in the current exploration viewport', () => {
+    const controller = createGameController(createBattleFixture(false, false));
+    const id = 'goblin-fixture-nest-0';
+    const tile = controller.goblins.snapshots().find((actor) => actor.id === id)!.tile;
+    controller.setWorldViewport({ left: 0, top: 0, right: 1, bottom: 1 });
+    expect(controller.dropActorItem(id, 'ration', 1)).toMatchObject({ ok: true });
+    expect(controller.getSnapshot().searchCueTiles).toEqual([]);
+    controller.setWorldViewport({ left: tile.col * 48, top: tile.row * 48, right: (tile.col + 1) * 48, bottom: (tile.row + 1) * 48 });
+    expect(controller.dropActorItem(id, 'stone', 1)).toMatchObject({ ok: true });
+    expect(controller.getSnapshot().searchCueTiles).toEqual([tile]);
+  });
+  it('keeps a cue after a successful search even once all discovered items are taken', () => {
+    const controller = createGameController(openMap(), undefined, { random: () => 0 });
+    controller.openInventory();
+    controller.dropItem('ration', 1);
+    controller.closeInventory();
+    controller.pointerDown({ clientX: 58, clientY: 58, pointerType: 'mouse', button: 0, rect: { left: 0, top: 0 }, camera: { x: 0, y: 0 } });
+    controller.startSearch();
+    controller.tick(5);
+    controller.takeFoundItem('ration', 1);
+    expect(controller.getSnapshot().interaction).toMatchObject({ kind: 'results', foundAny: true, found: [] });
+    expect(controller.getSnapshot().searchCueTiles).toEqual([{ col: 1, row: 1 }]);
   });
   it('keeps session ground when terrain chunk caches are evicted', () => {
     const map = openMap();
@@ -76,6 +118,19 @@ describe('game controller integration', () => {
     const loot = c.groundAt({ col: 1, row: 1 });
     c.tick(0);
     expect(c.groundAt({ col: 1, row: 1 })).toEqual(loot);
+    expect(c.getSnapshot().searchCueTiles).toEqual([{ col: 1, row: 1 }]);
+  });
+  it('remembers a battle on entry before admission and marks its completed site', () => {
+    const controller = createGameController(openMap());
+    const worldBattle = controller.battles.create({ col: 1, row: 1 }, createBattle([
+      createCombatant('adventurer-test', 'player', { col: 4, row: 3 }, 'adventurer'),
+      createCombatant('goblin-test', 'goblin', { col: 5, row: 3 })
+    ]));
+    controller.tick(0);
+    expect(controller.getSnapshot().playerEntry).toBe('waiting');
+    worldBattle.battle.combatants['goblin-test']!.hp = 1;
+    expect(controller.dispatchBattle({ kind: 'attack', actorId: 'adventurer-test', targetId: 'goblin-test' })).toBe(true);
+    expect(controller.getSnapshot().searchCueTiles).toEqual([{ col: 1, row: 1 }]);
   });
   it('converts canvas input into a route and advances to arrival', () => {
     const controller = createGameController(openMap());

@@ -21,6 +21,8 @@ import {
 } from './tileIllustration';
 import { createWorldBattleView, type WorldBattleView } from './worldBattleRendering';
 import type { BattleId } from './worldBattles';
+import { createSearchCueView } from './searchCueRendering';
+import { tileCenterInViewport, type WorldViewport } from './worldObservation';
 
 export type GameRuntimeOptions = {
   host: HTMLElement;
@@ -88,6 +90,7 @@ export function createGameRuntime({
   const searchProgress = new Graphics();
   const depthLayer = new Container();
   const battleOverlayLayer = new Container();
+  const searchCueView = createSearchCueView();
   depthLayer.sortableChildren = true;
   const player = createPlayerSprite();
   const adventurerViews = new Map<
@@ -249,7 +252,8 @@ export function createGameRuntime({
         depthLayer.addChild(sprite.view);
         goblinViews.set(snapshot.id, { sprite, time: 0, state: '' });
       }
-      world.addChild(groundLayer, marker, depthLayer, searchProgress, battleOverlayLayer);
+      // Cues intentionally sit above all map characters and battle decoration.
+      world.addChild(groundLayer, marker, depthLayer, searchProgress, battleOverlayLayer, searchCueView.view);
       const updateCamera = () => {
         camera = cameraForPlayer(
           movement.position,
@@ -262,6 +266,12 @@ export function createGameRuntime({
         );
         world.position.set(camera.x, camera.y);
       };
+      const worldViewport = (): WorldViewport => ({
+        left: -camera.x,
+        top: -camera.y,
+        right: -camera.x + host.clientWidth,
+        bottom: -camera.y + host.clientHeight
+      });
       // Calculate the initial camera before selecting the first render window.
       updateCamera();
       syncChunks();
@@ -350,13 +360,9 @@ export function createGameRuntime({
         // offscreen Pixi objects for every simulated background encounter.
         follow();
         battleAnimationTime += Math.min(deltaSeconds, 0.1);
-        const battles = controller.getSnapshot().battles;
-        const viewport = {
-          left: -camera.x,
-          top: -camera.y,
-          right: -camera.x + host.clientWidth,
-          bottom: -camera.y + host.clientHeight
-        };
+        const state = controller.getSnapshot();
+        const battles = state.battles;
+        const viewport = worldViewport();
         const visibleBattles = battles.filter((battle) => {
           const x = (battle.tile.col + 0.5) * TILE_SIZE;
           const footY = (battle.tile.row + 0.75) * TILE_SIZE;
@@ -385,6 +391,14 @@ export function createGameRuntime({
           }
           view.update(battle, battleAnimationTime);
         }
+        searchCueView.update(state.searchCueTiles, viewport);
+        // The renderer's broad battle culling is visual only. Knowledge uses
+        // the unambiguous center-of-tile rule.
+        controller.observeBattles(
+          visibleBattles
+            .filter((battle) => tileCenterInViewport(battle.tile, viewport))
+            .map((battle) => battle.id)
+        );
         marker.clear();
         if (movement.destination)
           marker.circle(0, 0, 8).stroke({ color: '#fff3b0', width: 2, alpha: 0.9 });
@@ -426,9 +440,18 @@ export function createGameRuntime({
         }
         try {
           const delta = Math.min(ticker.deltaMS / 1000, 0.1);
+          // Supply the last/current map viewport before simulation so an NPC
+          // drop in this step can be judged at its actual event time.
+          if (controller.mode === 'exploration') {
+            updateCamera();
+            controller.setWorldViewport(worldViewport());
+          } else controller.setWorldViewport(null);
           controller.tick(delta);
           const paused = controller.mode !== 'exploration';
-          if (paused) return;
+          if (paused) {
+            controller.setWorldViewport(null);
+            return;
+          }
           updateLocation();
           draw(delta);
           app.render();
@@ -440,7 +463,10 @@ export function createGameRuntime({
       };
       let wasHidden = false;
       const visibility = () => {
-        if (document.hidden) wasHidden = true;
+        if (document.hidden) {
+          wasHidden = true;
+          controller.setWorldViewport(null);
+        }
       };
       try {
         draw();
@@ -488,6 +514,8 @@ export function createGameRuntime({
         chunkResources.destroyAll();
         for (const view of battleViews.values()) view.destroy();
         battleViews.clear();
+        controller.setWorldViewport(null);
+        searchCueView.destroy();
         for (const resource of [...adventurerViews.values(), ...goblinViews.values()])
           resource.sprite.view.destroy({ children: true });
         adventurerViews.clear();

@@ -42,6 +42,8 @@ import {
   type InteractionState,
   type RandomSource
 } from './interactions';
+import { createSearchKnowledge } from './searchKnowledge';
+import { tileCenterInViewport, type WorldViewport } from './worldObservation';
 
 export type GameMode = 'exploration' | 'battle' | 'result';
 export type Encounter = { goblinId: string; tile: Point };
@@ -67,6 +69,9 @@ export type GameSnapshot = {
   playerEntry: 'waiting' | 'admitted' | null;
   inventory: InventorySnapshot;
   interaction: InteractionState;
+  /** Tiles where the player knows a search may be worthwhile. */
+  searchCueTiles: Point[];
+  searchCueRevision: number;
 };
 export const ENEMY_ACTION_DELAY_SECONDS = 0.9;
 const STEP = 1 / 60;
@@ -93,6 +98,8 @@ export function createGameController(
   });
   const registry = createWorldBattleRegistry();
   const inventoryService = createInventoryService();
+  const searchKnowledge = createSearchKnowledge();
+  let worldViewport: WorldViewport | null = null;
   const playerInventory = inventoryService.register('player', 30000, [
     { id: 'ration', quantity: 4 },
     { id: 'bandage', quantity: 3 },
@@ -194,6 +201,7 @@ export function createGameController(
           ? 'admitted'
           : 'waiting'
         : null;
+    const cues = searchKnowledge.snapshot();
     return {
       mode: session.kind,
       battle,
@@ -203,7 +211,9 @@ export function createGameController(
       selectedBattleId: active?.id ?? null,
       playerEntry,
       inventory: playerInventory.snapshot(),
-      interaction: structuredClone(interaction)
+      interaction: structuredClone(interaction),
+      searchCueTiles: cues.tiles,
+      searchCueRevision: cues.revision
     };
   };
   const notify = () => {
@@ -236,6 +246,7 @@ export function createGameController(
     if (registry.membership('player')) return registry.at(tile);
     relocate(tile);
     const value = registry.create(tile, createBattle(goblinId, sceneAt(tile)));
+    searchKnowledge.rememberBattle(value.id);
     goblins.holdForBattle(goblinId);
     closeInventorySession();
     closeInteraction();
@@ -269,6 +280,8 @@ export function createGameController(
       approachEdge: 'west',
       arrivalStep: worldStep
     });
+    // Entering the battle screen is enough to know its location, even before admission.
+    searchKnowledge.rememberBattle(value.id);
     closeInventorySession();
     closeInteraction();
     session = { kind: 'battle', battleId: value.id };
@@ -446,6 +459,8 @@ export function createGameController(
         else if (c.kind === 'adventurer') adventurers.remove(c.id);
         if (c.kind !== 'player') inventoryService.unregister(c.id);
       }
+    // Completion is the only battle event that converts remembered knowledge into a cue.
+    searchKnowledge.finishBattle(value.id, value.tile);
     registry.remove(value.id);
     routeFields.delete(value.id);
     if (registry.all().length === 0) {
@@ -736,13 +751,17 @@ export function createGameController(
     }
     if (interaction.kind === 'searching') {
       advanceWorld(elapsed, undefined, (dt) => {
-        if (interaction.kind === 'searching')
+        if (interaction.kind === 'searching') {
+          const searching = interaction;
           interaction = advanceSearch(
             interaction,
             dt,
             inventoryService.groundAt(interaction.tile),
             random
           );
+          if (interaction.kind === 'results')
+            searchKnowledge.completeSearch(searching.tile, interaction.foundAny);
+        }
       });
       notify();
       return;
@@ -802,7 +821,10 @@ export function createGameController(
       if (session.kind !== 'exploration' || !inventorySessionOpen || movement.route.length)
         return { ok: false as const, error: 'unavailable' as const };
       const result = inventoryService.drop('player', movement.tile, id, quantity);
-      if (result.ok) notify();
+      if (result.ok) {
+        searchKnowledge.markTile(movement.tile);
+        notify();
+      }
       return result;
     },
     startSearch: () => {
@@ -854,8 +876,22 @@ export function createGameController(
       );
       if (!actor) return { ok: false as const, error: 'unavailable' as const };
       const result = inventoryService.drop(actorId, actor.tile, id, quantity);
-      if (result.ok) notify();
+      if (result.ok) {
+        if (session.kind === 'exploration' && worldViewport && tileCenterInViewport(actor.tile, worldViewport))
+          searchKnowledge.markTile(actor.tile);
+        notify();
+      }
       return result;
+    },
+    /** Called by the map projection after it has actually displayed active battles. */
+    observeBattles: (ids: readonly BattleId[]) => {
+      if (session.kind !== 'exploration') return;
+      for (const id of ids)
+        if (registry.get(id)) searchKnowledge.rememberBattle(id);
+    },
+    /** World-space CSS-pixel viewport, used only for observation at event time. */
+    setWorldViewport: (bounds: WorldViewport | null) => {
+      worldViewport = bounds ? { ...bounds } : null;
     }
   };
 }

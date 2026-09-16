@@ -76,6 +76,12 @@ function battleFighters(app: ReturnType<typeof fakeApplication>['app']) {
   return worldLayers(app).depth.children.find((child) => child.label === 'world-battle-fighters') as Container | undefined;
 }
 
+function searchChest(app: ReturnType<typeof fakeApplication>['app']) {
+  const world = app.stage.children[0] as Container;
+  const cues = world.children.find((child) => child.label === 'search-cue-overlay') as Container;
+  return cues?.children.find((child) => child.label === 'search-cue-chest');
+}
+
 describe('world battle map projection', () => {
   beforeEach(() => {
     vi.stubGlobal('window', { devicePixelRatio: 1 });
@@ -138,5 +144,52 @@ describe('world battle map projection', () => {
     fake.tick();
     expect(battleFighters(fake.app)).toBeUndefined();
     runtime.destroy();
+  });
+
+  it('renders known search tiles above the depth and battle layers', async () => {
+    const controller = createGameController(map);
+    controller.openInventory();
+    controller.dropItem('ration', 1);
+    const fake = fakeApplication();
+    const runtime = createGameRuntime({ host: testHost(), map, controller, tileStore: createTileStore(map), applicationFactory: () => fake.app as never });
+    await settleRuntime();
+    const chest = searchChest(fake.app)!;
+    expect(chest).toBeDefined();
+    expect(chest.position).toMatchObject({ x: 4 * 48 + 29, y: 4 * 48 + 31 });
+    const world = fake.app.stage.children[0] as Container;
+    expect(world.children.indexOf(chest.parent!)).toBeGreaterThan(world.children.indexOf(world.children[2]!));
+    runtime.destroy();
+  });
+
+  it('does not report a battle whose graphic culling bounds overlap but tile center is offscreen', async () => {
+    const controller = createGameController(map);
+    const observe = vi.spyOn(controller, 'observeBattles');
+    const battle = controller.battles.create({ col: 8, row: 4 }, createBattle('goblin'));
+    const fake = fakeApplication();
+    const runtime = createGameRuntime({ host: testHost(), map, controller, tileStore: createTileStore(map), applicationFactory: () => fake.app as never });
+    await settleRuntime();
+    expect(battleFighters(fake.app)).toBeDefined(); // broad artwork culling retains this view
+    expect(observe).toHaveBeenCalledWith([]);
+    controller.battles.remove(battle.id);
+    runtime.destroy();
+  });
+
+  it('clears observation bounds on hidden pages and runtime destruction', async () => {
+    let visibility: (() => void) | undefined;
+    vi.stubGlobal('document', {
+      hidden: false,
+      addEventListener: (type: string, callback: () => void) => { if (type === 'visibilitychange') visibility = callback; },
+      removeEventListener: () => undefined
+    });
+    const controller = createGameController(map);
+    const viewport = vi.spyOn(controller, 'setWorldViewport');
+    const fake = fakeApplication();
+    const runtime = createGameRuntime({ host: testHost(), map, controller, tileStore: createTileStore(map), applicationFactory: () => fake.app as never });
+    await settleRuntime();
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    visibility?.();
+    expect(viewport).toHaveBeenLastCalledWith(null);
+    runtime.destroy();
+    expect(viewport).toHaveBeenLastCalledWith(null);
   });
 });
